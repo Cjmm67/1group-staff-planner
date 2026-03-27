@@ -157,17 +157,33 @@ const ROLES = {Server:{icon:"🍽️",colour:"#3B82F6"},Runner:{icon:"🏃",colo
 const DEPT_MAP = {"kaarla":"1-arden","oumi":"1-arden","sol & luna":"1-arden","sol and luna":"1-arden","1-arden bar op":"1-arden","bar op":"1-arden","bar operations":"1-arden","concierge":"1-arden"};
 
 const SCHEDULE_PROMPT = `You are a schedule data extractor for 1-Group Singapore hospitality.
-Extract employees and shifts from this schedule data.
-VENUES: 1-Alfaro, 1-Altitude Coast, 1-Altitude Melaka, 1-Arden, 1-Atico, 1-Flowerhill, Monti, The Alkaff Mansion, The Garage, The Riverhouse, The Summerhouse.
-DEPARTMENTS within 1-Arden: Kaarla, Oumi, Sol & Luna, 1-Arden Bar Op, Concierge. Map ALL to venue "1-Arden".
-COLUMN FORMAT: NAME, DEPARTMENT, then repeating per day: SHIFT TIME, BREAK TIME (HRS), WORK HOUR.
-SHIFT TIME: "10:00 - 22:30" style ranges, or codes L/Lunch=11:30-14:30, D/Dinner=17:30-22:30, OFF/RD/PH=rest day (skip).
-Roles: Server, Runner, Bartender, Kitchen Helper, Steward, Host/Hostess, Banquet Staff, Barista, Cashier.
-Rates: Server=14, Bartender=16, Kitchen Helper=12.5, Runner=11.5, Steward=11, Host=14.5.
-CRITICAL: Determine actual calendar dates. Use YYYY-MM-DD.
-IMPORTANT: Keep JSON compact. Skip OFF/RD days entirely — only include shifts with actual work times. Use minimal whitespace. If many employees, be concise.
+Extract employees and shifts from this staff schedule.
+
+FILE STRUCTURE:
+- Data is divided into SECTIONS by department. Department headers appear as standalone rows like "ARDEN BAR", "KAARLA", "OUMI OPS", "SOL & LUNA", "BAR OPS", "1-ALTITUDE COAST", "CONCIERGE" etc.
+- Each section has a DATE row showing actual dates: "Monday, 5 January 2026", "Tuesday, 6 January 2026" etc.
+- Employee rows: NAME, DEPARTMENT/ROLE, then repeating 7 times: SHIFT TIME, BREAK TIME (HRS), WORK HOUR, then TOTAL HOURS.
+
+SHIFT TIME FORMATS: "1PM - 11PM", "10AM - 5PM", "6PM - 11PM", "8AM - 5PM", "10:30AM - 9:30PM" etc.
+Convert ALL times to 24h format: "1PM - 11PM" → start:"13:00" end:"23:00". "10AM - 5PM" → start:"10:00" end:"17:00".
+Skip entries: OFF, REST DAY, ~ NA ~, PH — these mean no shift.
+Ignore "DSR" notes that appear in cells.
+
+DEPARTMENTS map to venues:
+- ARDEN BAR, KAARLA, OUMI OPS, SOL & LUNA, BAR OPS, CONCIERGE → all map to venue "1-Arden"
+- 1-ALTITUDE COAST → venue "1-Altitude Coast"
+- Other department names → match to nearest venue
+
+EMPLOYEE TYPES — infer from DEPARTMENT column:
+- Contains "AGENCY" or "PART-TIME" or "PART TIME" → type: "part-time"  
+- Contains "INTERN" → type: "part-time"
+- Contains "IN-HOUSE PART TIME" → type: "part-time"
+- Otherwise → type: "full-time"
+
+Extract ACTUAL dates from the DATE rows. Use YYYY-MM-DD format.
+Keep JSON compact. Skip rest days. Use minimal whitespace.
 RESPOND ONLY valid JSON, no markdown, no backticks:
-{"venue":"1-Arden","weekStart":"YYYY-MM-DD","weekEnd":"YYYY-MM-DD","employees":[{"name":"Name","roles":["Server"],"type":"full-time","rate":14,"department":"Kaarla","shifts":[{"date":"YYYY-MM-DD","start":"17:30","end":"22:30","role":"Server","breakMins":60}]}],"notes":"observations"}`;
+{"venue":"1-Arden","weekStart":"2026-01-05","weekEnd":"2026-01-11","departments":["Arden Bar","Kaarla","Oumi","Sol & Luna","Bar Ops","Concierge"],"employees":[{"name":"Full Name","department":"Kaarla","role":"Junior Assistant Mgr","type":"full-time","shifts":[{"date":"2026-01-05","start":"17:00","end":"23:00","breakHrs":0,"workHrs":6}],"totalHrs":44}],"notes":"observations"}`;
 
 const REVENUE_PROMPT = `You are a revenue data extractor for 1-Group Singapore.
 Extract revenue targets per month, week, venue. Venues: 1-Alfaro, 1-Altitude Coast, 1-Altitude Melaka, 1-Arden, 1-Atico, 1-Flowerhill, Monti, The Alkaff Mansion, The Garage, The Riverhouse, The Summerhouse.
@@ -277,33 +293,22 @@ async function handleUpload(file, mode) {
         { type: "text", text: `Extract data from "${file.name}". Return ONLY valid JSON.` }
       ];
     } else {
-      // CSV or Excel → read as text
-      let text = '';
-      if (ext === 'csv') {
-        log(mode, 'Reading CSV as text...');
-        text = await new Promise((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(r.result);
-          r.onerror = () => rej(new Error('Failed to read CSV'));
-          r.readAsText(file);
-        });
-      } else {
-        log(mode, 'Parsing Excel with SheetJS...');
-        const buf = await new Promise((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(r.result);
-          r.onerror = () => rej(new Error('Failed to read Excel'));
-          r.readAsArrayBuffer(file);
-        });
-        const wb = XLSX.read(buf, { type: 'array' });
-        const parts = [];
-        wb.SheetNames.forEach(name => {
-          const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false });
-          if (csv.trim()) parts.push(`--- Sheet: ${name} ---\n${csv}`);
-        });
-        text = parts.join('\n\n');
-        log(mode, `Parsed ${wb.SheetNames.length} sheets`);
-      }
+      // CSV or Excel → parse with SheetJS (handles UTF-16, encoding issues)
+      log(mode, `Parsing ${ext.toUpperCase()} with SheetJS...`);
+      const buf = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = () => rej(new Error('Failed to read file'));
+        r.readAsArrayBuffer(file);
+      });
+      const wb = XLSX.read(new Uint8Array(buf), { type: 'array', codepage: 65001 });
+      const parts = [];
+      wb.SheetNames.forEach(name => {
+        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false });
+        if (csv.trim()) parts.push(`--- Sheet: ${name} ---\n${csv}`);
+      });
+      let text = parts.join('\n\n');
+      log(mode, `Parsed ${wb.SheetNames.length} sheet(s), ${text.length} chars`);
 
       log(mode, `Text ready: ${text.length} chars, ${text.split('\\n').length} lines`);
       if (text.length > 80000) text = text.substring(0, 80000) + '\n...(truncated)';
@@ -406,22 +411,24 @@ function showPreview(mode, data) {
 
   if (mode === 'schedule') {
     const emps = data.employees || [];
+    const depts = data.departments || [...new Set(emps.map(e => e.department).filter(Boolean))];
     let rows = emps.map(e => `<tr>
       <td style="font-weight:600">${e.name}</td>
       <td style="color:var(--stone)">${e.department||'—'}</td>
-      <td>${(e.roles||[]).join(', ')}</td>
-      <td>$${e.rate||'—'}/hr</td>
+      <td>${e.role||'—'}</td>
+      <td>${e.type||'FT'}</td>
       <td style="font-weight:600">${e.shifts?.length||0}</td>
+      <td>${e.totalHrs||'—'}h</td>
     </tr>`).join('');
 
     el.innerHTML = `
-      <div class="msg-ok">✅ Extracted ${emps.length} employees · ${data.venue||'?'} · ${data.weekStart||'?'} → ${data.weekEnd||'?'}</div>
+      <div class="msg-ok">✅ Extracted ${emps.length} employees · ${depts.length} depts · ${data.weekStart||'?'} → ${data.weekEnd||'?'}</div>
       ${data.notes ? `<div style="font-size:12px;color:var(--stone);font-style:italic;margin-bottom:8px">${data.notes}</div>` : ''}
       <div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:12px">
-        <table><thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Rate</th><th>Shifts</th></tr></thead><tbody>${rows}</tbody></table>
+        <table><thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Type</th><th>Shifts</th><th>Hrs</th></tr></thead><tbody>${rows}</tbody></table>
       </div>
       <div style="display:flex;gap:8px">
-        <button class="btn btn-primary" onclick="doImport('schedule')" style="flex:1">✅ Import ${emps.length} Employees & Shifts</button>
+        <button class="btn btn-primary" onclick="doImport('schedule')" style="flex:1">✅ Import ${emps.length} Employees (${depts.length} departments)</button>
         <button class="btn btn-ghost" onclick="resetUpload('schedule')">Cancel</button>
       </div>`;
 
@@ -480,38 +487,31 @@ function renderSchedule() {
   const depts = [...new Set(emps.map(e => e.department).filter(Boolean))];
 
   let rows = emps.map(e => {
-    const hrs = (e.shifts||[]).reduce((a, s) => {
-      if (!s.start || !s.end) return a;
-      const [sh,sm] = s.start.split(':').map(Number);
-      const [eh,em] = s.end.split(':').map(Number);
-      let h = (eh*60+em - sh*60-sm)/60; if(h<0) h+=24;
-      return a + h - (s.breakMins||0)/60;
-    }, 0);
+    const hrs = e.totalHrs || (e.shifts||[]).reduce((a, s) => a + (s.workHrs||0), 0);
     const over = hrs > 44;
     return `<tr>
       <td style="font-weight:600">${e.name}</td>
       <td style="color:var(--stone)">${e.department||'—'}</td>
-      <td>${(e.roles||[]).join(', ')}</td>
+      <td>${e.role||'—'}</td>
       <td>${e.type||'FT'}</td>
-      <td>$${e.rate||'—'}/hr</td>
       <td>${e.shifts?.length||0}</td>
-      <td style="font-weight:${over?700:400};color:${over?'var(--error)':'inherit'}">${hrs.toFixed(1)}h ${over?'⚠️':''}</td>
+      <td style="font-weight:${over?700:400};color:${over?'var(--error)':'inherit'}">${typeof hrs === 'number' ? hrs.toFixed(1) : hrs}h ${over?'⚠️':''}</td>
     </tr>`;
   }).join('');
 
   el.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <h3 style="font-size:16px;font-weight:700">📅 Schedule: ${scheduleData.venue||'?'} · ${scheduleData.weekStart||'?'} → ${scheduleData.weekEnd||'?'}</h3>
+      <h3 style="font-size:16px;font-weight:700">📅 ${scheduleData.weekStart||'?'} → ${scheduleData.weekEnd||'?'}</h3>
       <button class="btn btn-danger" onclick="clearSchedule()" style="font-size:12px;padding:6px 12px">Clear</button>
     </div>
     <div class="stat-grid">
       <div class="stat"><div class="stat-label">EMPLOYEES</div><div class="stat-value">${emps.length}</div></div>
       <div class="stat"><div class="stat-label">TOTAL SHIFTS</div><div class="stat-value">${totalShifts}</div></div>
       <div class="stat"><div class="stat-label">DEPARTMENTS</div><div class="stat-value">${depts.length}</div><div class="stat-sub">${depts.join(', ')}</div></div>
-      <div class="stat"><div class="stat-label">VENUE</div><div class="stat-value">${scheduleData.venue||'?'}</div></div>
+      <div class="stat"><div class="stat-label">VENUE</div><div class="stat-value">${scheduleData.venue||'1-Arden'}</div></div>
     </div>
     <div class="card" style="padding:0;overflow:auto">
-      <table><thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Type</th><th>Rate</th><th>Shifts</th><th>Total Hrs</th></tr></thead>
+      <table><thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Type</th><th>Shifts</th><th>Total Hrs</th></tr></thead>
       <tbody>${rows}</tbody></table>
     </div>`;
 }
