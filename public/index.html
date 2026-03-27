@@ -60,6 +60,17 @@ td { padding:10px 12px; border-bottom:1px solid var(--border); font-size:13px }
 @keyframes spin { to { transform:rotate(360deg) } }
 @keyframes fadeIn { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:translateY(0) } }
 .fade-in { animation:fadeIn .3s }
+details summary { list-style:none }
+details summary::-webkit-details-marker { display:none }
+details summary::before { content:'▸ '; font-size:14px }
+details[open] summary::before { content:'▾ ' }
+@media print {
+  header, .ai-bar, .upload-zone, .btn-danger, .btn-ghost, #schedule-card, #revenue-card, #saved-reports-section, #empty-state { display:none !important }
+  body { background:#fff }
+  .card { box-shadow:none; border:1px solid #ddd }
+  main { padding:0 }
+  .stat-grid { break-inside:avoid }
+}
 #toast { position:fixed; top:80px; right:20px; padding:12px 20px; border-radius:10px; color:#fff; font-size:13px; font-weight:600; z-index:100; box-shadow:0 4px 16px rgba(0,0,0,.15); display:none }
 </style>
 </head>
@@ -112,6 +123,12 @@ td { padding:10px 12px; border-bottom:1px solid var(--border); font-size:13px }
 
   <!-- Revenue Results -->
   <div id="revenue-results" style="display:none"></div>
+
+  <!-- Saved Reports -->
+  <div id="saved-reports-section" class="card" style="margin-bottom:16px">
+    <h3 style="font-size:14px;font-weight:700;margin-bottom:8px">💾 Saved Reports</h3>
+    <div id="saved-reports"></div>
+  </div>
 
   <!-- Empty State -->
   <div id="empty-state" style="text-align:center;padding:40px 20px;color:var(--stone)">
@@ -484,9 +501,160 @@ function renderSchedule() {
   el.style.display = 'block';
   const emps = scheduleData.employees || [];
   const totalShifts = emps.reduce((a, e) => a + (e.shifts?.length || 0), 0);
-  const depts = [...new Set(emps.map(e => e.department).filter(Boolean))];
+  const depts = scheduleData.departments || [...new Set(emps.map(e => e.department).filter(Boolean))];
+  const days = [];
+  if (scheduleData.weekStart && scheduleData.weekEnd) {
+    const s = new Date(scheduleData.weekStart);
+    const e = new Date(scheduleData.weekEnd);
+    for (let d = new Date(s); d <= e; d.setDate(d.getDate()+1)) {
+      days.push(new Date(d));
+    }
+  }
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const fmtDay = d => `${dayNames[d.getDay()]} ${d.getDate()}/${d.getMonth()+1}`;
+  const fmtISO = d => d.toISOString().split('T')[0];
 
-  let rows = emps.map(e => {
+  // Classify shift into meal period based on start time
+  function getMealPeriod(startTime) {
+    if (!startTime) return 'other';
+    const h = parseInt(startTime.split(':')[0]);
+    if (h < 10) return 'breakfast';
+    if (h < 15) return 'lunch';
+    return 'dinner';
+  }
+
+  // Build staffing matrix: dept → day → meal period → [employees]
+  const matrix = {};
+  depts.forEach(dept => {
+    matrix[dept] = {};
+    days.forEach(day => {
+      const iso = fmtISO(day);
+      matrix[dept][iso] = { breakfast: [], lunch: [], dinner: [] };
+    });
+  });
+
+  emps.forEach(emp => {
+    const dept = emp.department || 'Other';
+    if (!matrix[dept]) {
+      matrix[dept] = {};
+      days.forEach(day => { matrix[dept][fmtISO(day)] = { breakfast: [], lunch: [], dinner: [] }; });
+    }
+    (emp.shifts || []).forEach(sh => {
+      const period = getMealPeriod(sh.start);
+      const dayData = matrix[dept]?.[sh.date];
+      if (dayData && dayData[period]) {
+        dayData[period].push({
+          name: emp.name,
+          role: emp.role || '',
+          type: emp.type || 'full-time',
+          start: sh.start,
+          end: sh.end,
+          hrs: sh.workHrs || 0
+        });
+      }
+    });
+  });
+
+  const mealPeriods = [
+    { key: 'breakfast', label: 'Breakfast', color: '#FEF3C7', textColor: '#92400E', icon: '🌅' },
+    { key: 'lunch', label: 'Lunch', color: '#DBEAFE', textColor: '#1E40AF', icon: '☀️' },
+    { key: 'dinner', label: 'Dinner', color: '#EDE9FE', textColor: '#5B21B6', icon: '🌙' }
+  ];
+
+  // Build department tables
+  let deptSections = '';
+  let grandTotals = {};
+  days.forEach(d => { grandTotals[fmtISO(d)] = 0; });
+  let grandTotal = 0;
+
+  depts.forEach(dept => {
+    let deptTotal = 0;
+    let deptDayTotals = {};
+    days.forEach(d => { deptDayTotals[fmtISO(d)] = 0; });
+
+    // Meal period rows
+    let mealRows = '';
+    mealPeriods.forEach(mp => {
+      let hasAny = false;
+      days.forEach(d => {
+        const staff = matrix[dept]?.[fmtISO(d)]?.[mp.key] || [];
+        if (staff.length > 0) hasAny = true;
+      });
+      if (!hasAny) return; // skip empty meal periods
+
+      let cells = '';
+      let periodTotal = 0;
+      days.forEach(d => {
+        const iso = fmtISO(d);
+        const staff = matrix[dept]?.[iso]?.[mp.key] || [];
+        const count = staff.length;
+        periodTotal += count;
+        deptDayTotals[iso] += count;
+        deptTotal += count;
+        grandTotals[iso] += count;
+        grandTotal += count;
+
+        if (count === 0) {
+          cells += `<td style="text-align:center;color:var(--stone);font-size:11px;vertical-align:top;padding:6px 4px">—</td>`;
+        } else {
+          const names = staff.map(s => {
+            const typeTag = s.type === 'part-time' ? '<span style="color:var(--warning);font-size:9px;margin-left:2px">PT</span>' : '';
+            return `<div style="font-size:10px;line-height:1.4;white-space:nowrap">${s.name.split(' ').slice(0,2).join(' ')}${typeTag}</div>`;
+          }).join('');
+          cells += `<td style="vertical-align:top;padding:4px;min-width:100px">
+            <div style="font-size:11px;font-weight:700;color:${mp.textColor};margin-bottom:2px">${count}</div>
+            ${names}
+          </td>`;
+        }
+      });
+
+      mealRows += `<tr>
+        <td style="padding:6px 10px;font-size:12px;font-weight:600;white-space:nowrap;background:${mp.color};color:${mp.textColor};border-right:1px solid var(--border)">
+          ${mp.icon} ${mp.label}
+        </td>
+        ${cells}
+        <td style="text-align:center;font-weight:700;font-size:12px;color:${mp.textColor};background:${mp.color}">${periodTotal}</td>
+      </tr>`;
+    });
+
+    // Day totals row
+    let dayTotalCells = days.map(d => 
+      `<td style="text-align:center;font-weight:700;font-size:13px;padding:8px 4px">${deptDayTotals[fmtISO(d)]}</td>`
+    ).join('');
+
+    deptSections += `
+      <div style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="font-size:14px;font-weight:700">${dept}</div>
+          <div style="font-size:12px;color:var(--stone)">${deptTotal} total shifts</div>
+        </div>
+        <div style="overflow:auto;border:1px solid var(--border);border-radius:8px">
+          <table style="width:100%;border-collapse:collapse;min-width:700px">
+            <thead><tr style="background:var(--s2)">
+              <th style="padding:8px 10px;text-align:left;font-size:11px;font-weight:600;color:var(--stone);border-right:1px solid var(--border);width:100px">Period</th>
+              ${days.map(d => `<th style="padding:8px 4px;text-align:center;font-size:11px;font-weight:600;color:var(--stone);min-width:90px">${fmtDay(d)}</th>`).join('')}
+              <th style="padding:8px 4px;text-align:center;font-size:11px;font-weight:600;color:var(--stone);width:50px">Total</th>
+            </tr></thead>
+            <tbody>
+              ${mealRows}
+              <tr style="background:var(--forest);color:#fff">
+                <td style="padding:8px 10px;font-weight:700;font-size:12px;border-right:1px solid rgba(255,255,255,.2)">DAY TOTAL</td>
+                ${dayTotalCells}
+                <td style="text-align:center;font-weight:800;font-size:14px">${deptTotal}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  });
+
+  // Grand totals row
+  let grandDayTotalCells = days.map(d =>
+    `<td style="text-align:center;font-weight:700;font-size:14px;padding:8px 4px">${grandTotals[fmtISO(d)]}</td>`
+  ).join('');
+
+  // Employee detail table (collapsible)
+  let empRows = emps.map(e => {
     const hrs = e.totalHrs || (e.shifts||[]).reduce((a, s) => a + (s.workHrs||0), 0);
     const over = hrs > 44;
     return `<tr>
@@ -495,24 +663,58 @@ function renderSchedule() {
       <td>${e.role||'—'}</td>
       <td>${e.type||'FT'}</td>
       <td>${e.shifts?.length||0}</td>
-      <td style="font-weight:${over?700:400};color:${over?'var(--error)':'inherit'}">${typeof hrs === 'number' ? hrs.toFixed(1) : hrs}h ${over?'⚠️':''}</td>
+      <td style="font-weight:${over?700:400};color:${over?'var(--error)':'inherit'}">${typeof hrs==='number'?hrs.toFixed(1):hrs}h ${over?'⚠️':''}</td>
     </tr>`;
   }).join('');
 
   el.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <h3 style="font-size:16px;font-weight:700">📅 ${scheduleData.weekStart||'?'} → ${scheduleData.weekEnd||'?'}</h3>
-      <button class="btn btn-danger" onclick="clearSchedule()" style="font-size:12px;padding:6px 12px">Clear</button>
-    </div>
-    <div class="stat-grid">
-      <div class="stat"><div class="stat-label">EMPLOYEES</div><div class="stat-value">${emps.length}</div></div>
-      <div class="stat"><div class="stat-label">TOTAL SHIFTS</div><div class="stat-value">${totalShifts}</div></div>
-      <div class="stat"><div class="stat-label">DEPARTMENTS</div><div class="stat-value">${depts.length}</div><div class="stat-sub">${depts.join(', ')}</div></div>
-      <div class="stat"><div class="stat-label">VENUE</div><div class="stat-value">${scheduleData.venue||'1-Arden'}</div></div>
-    </div>
-    <div class="card" style="padding:0;overflow:auto">
-      <table><thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Type</th><th>Shifts</th><th>Total Hrs</th></tr></thead>
-      <tbody>${rows}</tbody></table>
+    <div id="staffing-report">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <h3 style="font-size:18px;font-weight:700;margin-bottom:2px">📅 Weekly Staffing Report</h3>
+          <div style="font-size:13px;color:var(--stone)">${scheduleData.venue||'1-Arden'} · ${scheduleData.weekStart||'?'} → ${scheduleData.weekEnd||'?'}</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="downloadPDF()" style="font-size:12px;padding:8px 14px">📥 Download PDF</button>
+          <button class="btn btn-ghost" onclick="saveReport()" style="font-size:12px;padding:8px 14px">💾 Save Report</button>
+          <button class="btn btn-danger" onclick="clearSchedule()" style="font-size:12px;padding:8px 14px">Clear</button>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-label">EMPLOYEES</div><div class="stat-value">${emps.length}</div></div>
+        <div class="stat"><div class="stat-label">TOTAL SHIFTS</div><div class="stat-value">${totalShifts}</div></div>
+        <div class="stat"><div class="stat-label">DEPARTMENTS</div><div class="stat-value">${depts.length}</div><div class="stat-sub">${depts.join(', ')}</div></div>
+        <div class="stat"><div class="stat-label">WEEK HEADCOUNT</div><div class="stat-value">${grandTotal}</div><div class="stat-sub">shift-slots filled</div></div>
+      </div>
+
+      <!-- Grand total bar -->
+      <div style="overflow:auto;border:2px solid var(--forest);border-radius:8px;margin-bottom:16px">
+        <table style="width:100%;border-collapse:collapse;min-width:700px">
+          <thead><tr style="background:var(--forest);color:#fff">
+            <th style="padding:10px;text-align:left;font-size:12px;width:100px;border-right:1px solid rgba(255,255,255,.2)">ALL DEPTS</th>
+            ${days.map(d => `<th style="padding:10px 4px;text-align:center;font-size:12px;min-width:90px">${fmtDay(d)}</th>`).join('')}
+            <th style="padding:10px 4px;text-align:center;font-size:12px;width:50px">TOTAL</th>
+          </tr></thead>
+          <tbody><tr style="background:var(--s0)">
+            <td style="padding:8px 10px;font-weight:700;font-size:12px;border-right:1px solid var(--border)">Headcount</td>
+            ${grandDayTotalCells}
+            <td style="text-align:center;font-weight:800;font-size:15px;color:var(--forest)">${grandTotal}</td>
+          </tr></tbody>
+        </table>
+      </div>
+
+      <!-- Department breakdowns -->
+      ${deptSections}
+
+      <!-- Employee detail (collapsible) -->
+      <details style="margin-top:16px">
+        <summary style="cursor:pointer;font-size:14px;font-weight:600;padding:8px 0;color:var(--forest)">👥 Employee Detail (${emps.length} staff)</summary>
+        <div class="card" style="padding:0;overflow:auto;margin-top:8px">
+          <table><thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Type</th><th>Shifts</th><th>Total Hrs</th></tr></thead>
+          <tbody>${empRows}</tbody></table>
+        </div>
+      </details>
     </div>`;
 }
 
@@ -602,6 +804,93 @@ function clearSchedule() { scheduleData=null; renderSchedule(); checkEmpty(); to
 function clearRevenue() { revenueData=null; renderRevenue(); checkEmpty(); toast('Revenue cleared','info'); }
 function checkEmpty() { document.getElementById('empty-state').style.display = (!scheduleData && !revenueData) ? 'block' : 'none'; }
 
+function downloadPDF() {
+  const report = document.getElementById('staffing-report');
+  if (!report) return;
+  
+  // Create a print-friendly window
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html><html><head><title>Staffing Report - ${scheduleData?.venue||'1-Arden'} - ${scheduleData?.weekStart||''} to ${scheduleData?.weekEnd||''}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box }
+    body { font-family:'DM Sans',Arial,sans-serif; font-size:12px; color:#2C2C2C; padding:20px }
+    h3 { font-size:16px; margin-bottom:4px }
+    table { width:100%; border-collapse:collapse; margin-bottom:12px }
+    th,td { padding:6px 8px; border:1px solid #E5E7EB; font-size:11px }
+    th { background:#F3F4F6; font-weight:600; text-transform:uppercase; font-size:10px; color:#8B8578 }
+    .stat-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px }
+    .stat { border:1px solid #E5E7EB; border-radius:6px; padding:8px }
+    .stat-label { font-size:9px; font-weight:600; color:#8B8578; text-transform:uppercase }
+    .stat-value { font-size:16px; font-weight:700; color:#1B3A2D }
+    .stat-sub { font-size:9px; color:#8B8578 }
+    details { break-inside:avoid }
+    @media print { body { padding:10px } button { display:none !important } }
+  </style></head><body>`);
+  win.document.write(report.innerHTML);
+  win.document.write('</body></html>');
+  win.document.close();
+  setTimeout(() => {
+    win.print();
+  }, 500);
+  toast('PDF print dialog opened', 'info');
+}
+
+function saveReport() {
+  if (!scheduleData) return;
+  const key = `report_${scheduleData.venue||'1-arden'}_${scheduleData.weekStart||'unknown'}`;
+  const saved = JSON.parse(localStorage.getItem('saved-reports') || '{}');
+  saved[key] = {
+    data: scheduleData,
+    savedAt: new Date().toISOString(),
+    label: `${scheduleData.venue||'1-Arden'} · ${scheduleData.weekStart||'?'} → ${scheduleData.weekEnd||'?'}`
+  };
+  localStorage.setItem('saved-reports', JSON.stringify(saved));
+  toast(`Report saved: ${key}`, 'success');
+  renderSavedReports();
+}
+
+function loadSavedReport(key) {
+  const saved = JSON.parse(localStorage.getItem('saved-reports') || '{}');
+  if (saved[key]) {
+    scheduleData = saved[key].data;
+    renderSchedule();
+    document.getElementById('empty-state').style.display = 'none';
+    toast('Report loaded', 'success');
+  }
+}
+
+function deleteSavedReport(key) {
+  const saved = JSON.parse(localStorage.getItem('saved-reports') || '{}');
+  delete saved[key];
+  localStorage.setItem('saved-reports', JSON.stringify(saved));
+  renderSavedReports();
+  toast('Report deleted', 'info');
+}
+
+function renderSavedReports() {
+  const el = document.getElementById('saved-reports');
+  if (!el) return;
+  const saved = JSON.parse(localStorage.getItem('saved-reports') || '{}');
+  const keys = Object.keys(saved);
+  if (keys.length === 0) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--stone);padding:8px">No saved reports</div>';
+    return;
+  }
+  el.innerHTML = keys.map(k => {
+    const r = saved[k];
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div>
+        <div style="font-size:13px;font-weight:600;cursor:pointer" onclick="loadSavedReport('${k}')">${r.label}</div>
+        <div style="font-size:11px;color:var(--stone)">Saved ${new Date(r.savedAt).toLocaleDateString()}</div>
+      </div>
+      <div style="display:flex;gap:4px">
+        <button class="btn btn-ghost" onclick="loadSavedReport('${k}')" style="font-size:11px;padding:4px 10px">Load</button>
+        <button onclick="deleteSavedReport('${k}')" style="background:none;border:none;cursor:pointer;color:var(--error);font-size:14px">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 /* ═══════════════════════════════════════════════════
    AI
    ═══════════════════════════════════════════════════ */
@@ -652,6 +941,9 @@ async function askAI() {
   zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
   zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag'); handleUpload(e.dataTransfer?.files?.[0], mode); });
 });
+
+// Load saved reports on init
+renderSavedReports();
 </script>
 </body>
 </html>
