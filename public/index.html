@@ -1006,6 +1006,7 @@ function renderSchedule() {
         <div style="display:flex;gap:8px">
           <button class="btn btn-primary" onclick="downloadPDF()" style="font-size:12px;padding:8px 14px">📥 Download PDF</button>
           <button class="btn btn-ghost" onclick="saveReport()" style="font-size:12px;padding:8px 14px">💾 Save Report</button>
+          <button class="btn" onclick="runApprovalCheck()" style="font-size:12px;padding:8px 14px;background:var(--gold);color:var(--forest);font-weight:700">📋 Submit for Approval</button>
           <button class="btn btn-danger" onclick="clearSchedule()" style="font-size:12px;padding:8px 14px">Clear</button>
         </div>
       </div>
@@ -1066,6 +1067,9 @@ function renderSchedule() {
           <tbody>${empRows}</tbody></table>
         </div>
       </details>
+
+      <!-- Approval Panel -->
+      <div id="approval-panel" style="margin-top:16px"></div>
     </div>`;
 }
 
@@ -1315,6 +1319,181 @@ function saveReport() {
   localStorage.setItem('saved-reports', JSON.stringify(saved));
   toast(`Report saved: ${key}`, 'success');
   renderSavedReports();
+}
+
+/* ═══════════════════════════════════════════════════
+   HR MANAGER APPROVAL — 5% tolerance gate
+   ═══════════════════════════════════════════════════ */
+
+function runApprovalCheck() {
+  if (!scheduleData) { toast('No schedule loaded', 'error'); return; }
+  var panel = document.getElementById('approval-panel');
+  if (!panel) { toast('Approval panel not found', 'error'); return; }
+
+  var emps = scheduleData.employees || [];
+  var depts = scheduleData.departments || [];
+  if (!depts.length) {
+    var deptSet = {};
+    emps.forEach(function(e) { if (e.department) deptSet[e.department] = true; });
+    depts = Object.keys(deptSet);
+  }
+
+  var days = [];
+  if (scheduleData.weekStart && scheduleData.weekEnd) {
+    var s = new Date(scheduleData.weekStart);
+    var e2 = new Date(scheduleData.weekEnd);
+    for (var dd = new Date(s); dd <= e2; dd.setDate(dd.getDate()+1)) { days.push(new Date(dd)); }
+  }
+
+  var AP = [
+    { key:'breakfast', label:'Breakfast', start:6, end:11 },
+    { key:'lunch', label:'Lunch', start:11, end:15 },
+    { key:'hightea', label:'High Tea', start:15, end:18 },
+    { key:'dinner', label:'Dinner', start:18, end:24 }
+  ];
+  function parseH(t) { if(!t) return null; var p=t.split(':'); return parseInt(p[0])+(p[1]?parseInt(p[1])/60:0); }
+
+  // Build matrix
+  var mx = {};
+  depts.forEach(function(dept) {
+    mx[dept] = {};
+    days.forEach(function(day) {
+      var iso = day.toISOString().split('T')[0];
+      mx[dept][iso] = {};
+      AP.forEach(function(mp) { mx[dept][iso][mp.key] = []; });
+    });
+  });
+  emps.forEach(function(emp) {
+    var dept = emp.department || 'Other';
+    if (!mx[dept]) { mx[dept]={}; days.forEach(function(day){ var iso=day.toISOString().split('T')[0]; mx[dept][iso]={}; AP.forEach(function(mp){mx[dept][iso][mp.key]=[];}); }); }
+    (emp.shifts||[]).forEach(function(sh) {
+      var shS=parseH(sh.start), shE=parseH(sh.end);
+      if(shS===null||shE===null) return;
+      var shiftEnd = shE<=shS ? shE+24 : shE;
+      AP.forEach(function(mp) {
+        if(Math.max(shS,mp.start)<Math.min(shiftEnd,mp.end)) {
+          var dd=mx[dept]&&mx[dept][sh.date];
+          if(dd&&dd[mp.key]) dd[mp.key].push({name:emp.name,role:emp.role||'',department:emp.department||'',type:emp.type||'full-time'});
+        }
+      });
+    });
+  });
+
+  // Run all compliance checks
+  var totalReq=0, totalAct=0, checks=[];
+  var dn=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  depts.forEach(function(dept) {
+    days.forEach(function(day) {
+      var iso=day.toISOString().split('T')[0];
+      var dayLabel=dn[day.getDay()]+' '+day.getDate()+'/'+(day.getMonth()+1);
+      AP.forEach(function(mp) {
+        var staff=(mx[dept]&&mx[dept][iso]&&mx[dept][iso][mp.key])||[];
+        var comp=checkCompliance(dept,mp.key,staff,day.getDay(),null);
+        if(!comp) return;
+        var req=comp.rule.manager+comp.rule.barman+comp.rule.ft+comp.rule.pt;
+        var act=staff.length;
+        totalReq+=req; totalAct+=act;
+        var pct=req>0?Math.round((act/req)*100):100;
+        checks.push({dept:dept,day:dayLabel,date:iso,period:mp.label,required:req,actual:act,pct:pct,pass:pct>=95,status:comp.status,issues:comp.issues,ruleLabel:comp.ruleLabel});
+      });
+    });
+  });
+
+  var overallPct = totalReq>0 ? Math.round((totalAct/totalReq)*100) : 100;
+  var approved = overallPct >= 95;
+  var failedChecks = checks.filter(function(c){return !c.pass;});
+  var passedChecks = checks.filter(function(c){return c.pass;});
+
+  // Build HTML
+  var h = '';
+
+  // Banner
+  if (approved) {
+    h += '<div style="padding:20px;background:#D1FAE5;border:2px solid #10B981;border-radius:12px;margin-bottom:16px;text-align:center">'
+      +'<div style="font-size:36px;margin-bottom:8px">✅</div>'
+      +'<div style="font-size:20px;font-weight:700;color:#065F46">SCHEDULE APPROVED</div>'
+      +'<div style="font-size:14px;color:#065F46;margin-top:4px">Overall compliance: '+overallPct+'% (threshold: 95%)</div>'
+      +'<div style="font-size:12px;color:#065F46;margin-top:4px">'+passedChecks.length+'/'+checks.length+' checks passed · '+(scheduleData.weekStart||'')+' → '+(scheduleData.weekEnd||'')+'</div>'
+      +'<div style="font-size:11px;color:#065F46;margin-top:8px;opacity:.7">Approved: '+new Date().toLocaleString()+'</div></div>';
+  } else {
+    h += '<div style="padding:20px;background:rgba(196,69,54,.08);border:2px solid var(--error);border-radius:12px;margin-bottom:16px;text-align:center">'
+      +'<div style="font-size:36px;margin-bottom:8px">❌</div>'
+      +'<div style="font-size:20px;font-weight:700;color:var(--error)">SCHEDULE REJECTED</div>'
+      +'<div style="font-size:14px;color:var(--error);margin-top:4px">Overall compliance: '+overallPct+'% — below 95% threshold</div>'
+      +'<div style="font-size:12px;color:var(--error);margin-top:4px">'+failedChecks.length+' of '+checks.length+' checks failed</div></div>';
+  }
+
+  // Stats
+  h += '<div class="stat-grid" style="margin-bottom:16px">'
+    +'<div class="stat"><div class="stat-label">OVERALL</div><div class="stat-value" style="color:'+(approved?'#065F46':'var(--error)')+'">'+overallPct+'%</div><div class="stat-sub">compliance score</div></div>'
+    +'<div class="stat"><div class="stat-label">PASSED</div><div class="stat-value" style="color:#065F46">'+passedChecks.length+'</div><div class="stat-sub">of '+checks.length+'</div></div>'
+    +'<div class="stat"><div class="stat-label">FAILED</div><div class="stat-value" style="color:'+(failedChecks.length>0?'var(--error)':'#065F46')+'">'+failedChecks.length+'</div><div class="stat-sub">'+(failedChecks.length>0?'need attention':'none')+'</div></div>'
+    +'<div class="stat"><div class="stat-label">THRESHOLD</div><div class="stat-value">95%</div><div class="stat-sub">5% tolerance</div></div></div>';
+
+  // Progress bar
+  var barCol = approved ? '#10B981' : overallPct>=85 ? 'var(--warning)' : 'var(--error)';
+  h += '<div style="margin-bottom:16px;background:var(--s2);border-radius:8px;overflow:hidden;height:24px;position:relative">'
+    +'<div style="height:100%;width:'+Math.min(overallPct,100)+'%;background:'+barCol+';border-radius:8px"></div>'
+    +'<div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700">'+overallPct+'% compliant · 95% required</div></div>';
+
+  // Failed checks table
+  if (failedChecks.length > 0) {
+    h += '<div style="margin-bottom:16px"><h4 style="font-size:14px;font-weight:700;color:var(--error);margin-bottom:8px">❌ Failed Checks ('+failedChecks.length+')</h4>'
+      +'<div style="overflow:auto;border:1px solid var(--error);border-radius:8px"><table style="width:100%;border-collapse:collapse"><thead><tr style="background:rgba(196,69,54,.06)">'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Dept</th>'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Day</th>'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Period</th>'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Rule</th>'
+      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--error)">Req</th>'
+      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--error)">Actual</th>'
+      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--error)">%</th>'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Issue</th></tr></thead><tbody>';
+    failedChecks.forEach(function(c) {
+      h += '<tr style="border-bottom:1px solid var(--border)">'
+        +'<td style="padding:6px 10px;font-weight:600;font-size:12px">'+c.dept+'</td>'
+        +'<td style="padding:6px 10px;font-size:12px">'+c.day+'</td>'
+        +'<td style="padding:6px 10px;font-size:12px">'+c.period+'</td>'
+        +'<td style="padding:6px 10px;font-size:11px;color:var(--stone)">'+c.ruleLabel+'</td>'
+        +'<td style="padding:6px 10px;text-align:center;font-weight:700">'+c.required+'</td>'
+        +'<td style="padding:6px 10px;text-align:center;font-weight:700;color:var(--error)">'+c.actual+'</td>'
+        +'<td style="padding:6px 10px;text-align:center;color:var(--error)">'+c.pct+'%</td>'
+        +'<td style="padding:6px 10px;font-size:11px;color:var(--error)">'+c.issues.join('; ')+'</td></tr>';
+    });
+    h += '</tbody></table></div></div>';
+  }
+
+  // Passed checks (collapsible)
+  if (passedChecks.length > 0) {
+    h += '<details style="margin-bottom:16px"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:#065F46;padding:6px 0">✅ Passed Checks ('+passedChecks.length+'/'+checks.length+')</summary>'
+      +'<div style="overflow:auto;border:1px solid #10B981;border-radius:8px;margin-top:8px"><table style="width:100%;border-collapse:collapse"><thead><tr style="background:rgba(16,185,129,.06)">'
+      +'<th style="padding:6px 10px;text-align:left;font-size:11px;color:#065F46">Dept</th>'
+      +'<th style="padding:6px 10px;text-align:left;font-size:11px;color:#065F46">Day</th>'
+      +'<th style="padding:6px 10px;text-align:left;font-size:11px;color:#065F46">Period</th>'
+      +'<th style="padding:6px 10px;text-align:center;font-size:11px;color:#065F46">Req</th>'
+      +'<th style="padding:6px 10px;text-align:center;font-size:11px;color:#065F46">Actual</th>'
+      +'<th style="padding:6px 10px;text-align:center;font-size:11px;color:#065F46">%</th></tr></thead><tbody>';
+    passedChecks.forEach(function(c) {
+      h += '<tr style="border-bottom:1px solid var(--border)">'
+        +'<td style="padding:4px 10px;font-size:11px">'+c.dept+'</td>'
+        +'<td style="padding:4px 10px;font-size:11px">'+c.day+'</td>'
+        +'<td style="padding:4px 10px;font-size:11px">'+c.period+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;font-size:11px">'+c.required+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;font-size:11px;color:#065F46;font-weight:600">'+c.actual+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;font-size:11px;color:#065F46">'+c.pct+'%</td></tr>';
+    });
+    h += '</tbody></table></div></details>';
+  }
+
+  // Footer
+  if (!approved) {
+    h += '<div style="padding:12px;background:var(--s2);border-radius:8px;text-align:center"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Schedule needs adjustment</div><div style="font-size:12px;color:var(--stone)">Fix the '+failedChecks.length+' failed check'+(failedChecks.length>1?'s':'')+' and re-submit.</div></div>';
+  } else {
+    h += '<div style="padding:12px;background:#D1FAE5;border-radius:8px;text-align:center"><div style="font-size:13px;font-weight:600;color:#065F46">✅ Schedule approved and ready to publish</div></div>';
+  }
+
+  panel.innerHTML = h;
+  panel.scrollIntoView({ behavior:'smooth', block:'start' });
+  toast(approved ? 'Schedule APPROVED ✅' : 'Schedule REJECTED ❌', approved ? 'success' : 'error');
 }
 
 function loadSavedReport(key) {
