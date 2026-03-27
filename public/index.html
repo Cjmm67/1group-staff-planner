@@ -514,13 +514,41 @@ function renderSchedule() {
   const fmtDay = d => `${dayNames[d.getDay()]} ${d.getDate()}/${d.getMonth()+1}`;
   const fmtISO = d => d.toISOString().split('T')[0];
 
-  // Classify shift into meal period based on start time
-  function getMealPeriod(startTime) {
-    if (!startTime) return 'other';
-    const h = parseInt(startTime.split(':')[0]);
-    if (h < 10) return 'breakfast';
-    if (h < 15) return 'lunch';
-    return 'dinner';
+  // Meal period definitions (24h format)
+  const MEAL_PERIODS = [
+    { key: 'breakfast', label: 'Breakfast', start: 6, end: 11, color: '#FEF3C7', textColor: '#92400E', icon: '🌅' },
+    { key: 'lunch',     label: 'Lunch',     start: 12, end: 15, color: '#DBEAFE', textColor: '#1E40AF', icon: '☀️' },
+    { key: 'hightea',   label: 'High Tea',  start: 15, end: 17, color: '#D1FAE5', textColor: '#065F46', icon: '🍵' },
+    { key: 'dinner',    label: 'Dinner',    start: 18, end: 23, color: '#EDE9FE', textColor: '#5B21B6', icon: '🌙' },
+  ];
+
+  // Parse "13:00" or "1PM" to decimal hours
+  function parseHour(t) {
+    if (!t) return null;
+    const parts = t.split(':');
+    return parseInt(parts[0]) + (parts[1] ? parseInt(parts[1])/60 : 0);
+  }
+
+  // Determine ALL meal periods a shift overlaps with
+  // A shift overlaps a period if the shift's time range intersects the period's range
+  function getOverlappingPeriods(startTime, endTime) {
+    const sh = parseHour(startTime);
+    const eh = parseHour(endTime);
+    if (sh === null || eh === null) return [];
+    // Handle overnight shifts
+    const shiftEnd = eh <= sh ? eh + 24 : eh;
+    const periods = [];
+    MEAL_PERIODS.forEach(mp => {
+      // Shift overlaps period if shift starts before period ends AND shift ends after period starts
+      if (sh < mp.end && shiftEnd > mp.start) {
+        // Calculate hours within this period
+        const overlapStart = Math.max(sh, mp.start);
+        const overlapEnd = Math.min(shiftEnd, mp.end);
+        const hrs = Math.max(0, overlapEnd - overlapStart);
+        if (hrs > 0) periods.push({ key: mp.key, hrs: Math.round(hrs * 10) / 10 });
+      }
+    });
+    return periods;
   }
 
   // Build staffing matrix: dept → day → meal period → [employees]
@@ -529,7 +557,8 @@ function renderSchedule() {
     matrix[dept] = {};
     days.forEach(day => {
       const iso = fmtISO(day);
-      matrix[dept][iso] = { breakfast: [], lunch: [], dinner: [] };
+      matrix[dept][iso] = {};
+      MEAL_PERIODS.forEach(mp => { matrix[dept][iso][mp.key] = []; });
     });
   });
 
@@ -537,29 +566,32 @@ function renderSchedule() {
     const dept = emp.department || 'Other';
     if (!matrix[dept]) {
       matrix[dept] = {};
-      days.forEach(day => { matrix[dept][fmtISO(day)] = { breakfast: [], lunch: [], dinner: [] }; });
+      days.forEach(day => {
+        matrix[dept][fmtISO(day)] = {};
+        MEAL_PERIODS.forEach(mp => { matrix[dept][fmtISO(day)][mp.key] = []; });
+      });
     }
     (emp.shifts || []).forEach(sh => {
-      const period = getMealPeriod(sh.start);
+      const periods = getOverlappingPeriods(sh.start, sh.end);
       const dayData = matrix[dept]?.[sh.date];
-      if (dayData && dayData[period]) {
-        dayData[period].push({
-          name: emp.name,
-          role: emp.role || '',
-          type: emp.type || 'full-time',
-          start: sh.start,
-          end: sh.end,
-          hrs: sh.workHrs || 0
-        });
-      }
+      if (!dayData) return;
+      periods.forEach(p => {
+        if (dayData[p.key]) {
+          dayData[p.key].push({
+            name: emp.name,
+            role: emp.role || '',
+            type: emp.type || 'full-time',
+            start: sh.start,
+            end: sh.end,
+            periodHrs: p.hrs,
+            totalHrs: sh.workHrs || 0
+          });
+        }
+      });
     });
   });
 
-  const mealPeriods = [
-    { key: 'breakfast', label: 'Breakfast', color: '#FEF3C7', textColor: '#92400E', icon: '🌅' },
-    { key: 'lunch', label: 'Lunch', color: '#DBEAFE', textColor: '#1E40AF', icon: '☀️' },
-    { key: 'dinner', label: 'Dinner', color: '#EDE9FE', textColor: '#5B21B6', icon: '🌙' }
-  ];
+  const mealPeriods = MEAL_PERIODS;
 
   // Build department tables
   let deptSections = '';
@@ -572,16 +604,9 @@ function renderSchedule() {
     let deptDayTotals = {};
     days.forEach(d => { deptDayTotals[fmtISO(d)] = 0; });
 
-    // Meal period rows
+    // Meal period rows — show ALL periods, even if empty for some days
     let mealRows = '';
     mealPeriods.forEach(mp => {
-      let hasAny = false;
-      days.forEach(d => {
-        const staff = matrix[dept]?.[fmtISO(d)]?.[mp.key] || [];
-        if (staff.length > 0) hasAny = true;
-      });
-      if (!hasAny) return; // skip empty meal periods
-
       let cells = '';
       let periodTotal = 0;
       days.forEach(d => {
@@ -589,33 +614,44 @@ function renderSchedule() {
         const staff = matrix[dept]?.[iso]?.[mp.key] || [];
         const count = staff.length;
         periodTotal += count;
-        deptDayTotals[iso] += count;
-        deptTotal += count;
-        grandTotals[iso] += count;
-        grandTotal += count;
 
         if (count === 0) {
           cells += `<td style="text-align:center;color:var(--stone);font-size:11px;vertical-align:top;padding:6px 4px">—</td>`;
         } else {
           const names = staff.map(s => {
-            const typeTag = s.type === 'part-time' ? '<span style="color:var(--warning);font-size:9px;margin-left:2px">PT</span>' : '';
-            return `<div style="font-size:10px;line-height:1.4;white-space:nowrap">${s.name.split(' ').slice(0,2).join(' ')}${typeTag}</div>`;
+            const typeTag = s.type === 'part-time' ? '<span style="color:var(--warning);font-size:8px;margin-left:2px">PT</span>' : '';
+            const timeStr = s.start && s.end ? `<span style="color:var(--stone);font-size:9px">${s.start}-${s.end}</span>` : '';
+            const firstName = s.name.split(' ').slice(0,2).join(' ');
+            return `<div style="font-size:10px;line-height:1.5;white-space:nowrap">${firstName}${typeTag} ${timeStr}</div>`;
           }).join('');
-          cells += `<td style="vertical-align:top;padding:4px;min-width:100px">
-            <div style="font-size:11px;font-weight:700;color:${mp.textColor};margin-bottom:2px">${count}</div>
+          cells += `<td style="vertical-align:top;padding:4px;min-width:110px">
+            <div style="font-size:12px;font-weight:700;color:${mp.textColor};margin-bottom:2px">${count}</div>
             ${names}
           </td>`;
         }
       });
 
-      mealRows += `<tr>
+      mealRows += `<tr style="border-bottom:1px solid var(--border)">
         <td style="padding:6px 10px;font-size:12px;font-weight:600;white-space:nowrap;background:${mp.color};color:${mp.textColor};border-right:1px solid var(--border)">
-          ${mp.icon} ${mp.label}
+          ${mp.icon} ${mp.label}<div style="font-size:9px;font-weight:400">${mp.start}:00-${mp.end}:00</div>
         </td>
         ${cells}
         <td style="text-align:center;font-weight:700;font-size:12px;color:${mp.textColor};background:${mp.color}">${periodTotal}</td>
       </tr>`;
     });
+
+    // Unique headcount per day (a person counts once per day regardless of periods)
+    days.forEach(d => {
+      const iso = fmtISO(d);
+      const uniqueNames = new Set();
+      MEAL_PERIODS.forEach(mp => {
+        (matrix[dept]?.[iso]?.[mp.key] || []).forEach(s => uniqueNames.add(s.name));
+      });
+      deptDayTotals[iso] = uniqueNames.size;
+      deptTotal += 0; // we'll compute below
+    });
+    // Recompute deptTotal as sum of unique daily headcounts
+    deptTotal = Object.values(deptDayTotals).reduce((a,b) => a+b, 0);
 
     // Day totals row
     let dayTotalCells = days.map(d => 
@@ -648,7 +684,19 @@ function renderSchedule() {
       </div>`;
   });
 
-  // Grand totals row
+  // Grand totals: unique headcount per day across ALL departments
+  days.forEach(d => {
+    const iso = fmtISO(d);
+    const uniqueNames = new Set();
+    depts.forEach(dept => {
+      MEAL_PERIODS.forEach(mp => {
+        (matrix[dept]?.[iso]?.[mp.key] || []).forEach(s => uniqueNames.add(s.name));
+      });
+    });
+    grandTotals[iso] = uniqueNames.size;
+  });
+  grandTotal = Object.values(grandTotals).reduce((a,b) => a+b, 0);
+
   let grandDayTotalCells = days.map(d =>
     `<td style="text-align:center;font-weight:700;font-size:14px;padding:8px 4px">${grandTotals[fmtISO(d)]}</td>`
   ).join('');
