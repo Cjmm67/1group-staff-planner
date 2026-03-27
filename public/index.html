@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>1-Group Staff Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root {
+  --forest: #1B3A2D; --forest-light: #2D5A45;
+  --gold: #C9A84C; --gold-light: #E8D5A0;
+  --charcoal: #2C2C2C; --stone: #8B8578;
+  --error: #C44536; --success: #4A7C59; --warning: #D97706;
+  --s0: #FFFFFF; --s1: #F9FAFB; --s2: #F3F4F6;
+  --border: #E5E7EB; --border-s: #D1D5DB;
+}
+* { margin:0; padding:0; box-sizing:border-box }
+body { font-family:'DM Sans',system-ui,sans-serif; font-size:14px; color:var(--charcoal); background:var(--s1); -webkit-font-smoothing:antialiased }
+header { background:var(--forest); padding:14px 24px; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:50 }
+header h1 { color:#fff; font-size:18px; font-weight:700 }
+header h1 span { color:var(--gold); font-weight:400; margin-left:8px }
+main { max-width:1200px; margin:0 auto; padding:20px }
+.card { background:var(--s0); border:1px solid var(--border); border-radius:12px; padding:20px; margin-bottom:16px }
+.card h3 { font-size:15px; font-weight:700; margin-bottom:4px }
+.card p { font-size:12px; color:var(--stone) }
+.stat-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px }
+.stat { background:var(--s0); border:1px solid var(--border); border-radius:10px; padding:14px }
+.stat-label { font-size:11px; font-weight:600; color:var(--stone); text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px }
+.stat-value { font-size:22px; font-weight:700; color:var(--forest) }
+.stat-sub { font-size:11px; color:var(--stone); margin-top:2px }
+.upload-zone { border:2px dashed var(--border-s); border-radius:12px; padding:32px 20px; text-align:center; cursor:pointer; transition:all .2s }
+.upload-zone:hover, .upload-zone.drag { border-color:var(--gold); background:rgba(201,168,76,.06) }
+.upload-zone input[type=file] { display:block; margin:12px auto 0; font-size:13px }
+.btn { padding:10px 16px; border-radius:8px; border:none; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit }
+.btn-primary { background:var(--forest); color:#fff }
+.btn-danger { background:transparent; color:var(--error); border:1px solid var(--error) }
+.btn-ghost { background:var(--s0); color:var(--charcoal); border:1px solid var(--border) }
+table { width:100%; border-collapse:collapse }
+th { padding:10px 12px; text-align:left; font-size:11px; font-weight:600; color:var(--stone); text-transform:uppercase; border-bottom:1px solid var(--border); background:var(--s2) }
+td { padding:10px 12px; border-bottom:1px solid var(--border); font-size:13px }
+.spinner { width:36px; height:36px; border:3px solid var(--border); border-top-color:var(--gold); border-radius:50%; animation:spin 1s linear infinite; margin:0 auto 12px }
+.log { margin-top:12px; padding:10px; background:var(--s2); border-radius:6px; font-family:monospace; font-size:10px; color:var(--stone); max-height:120px; overflow:auto; white-space:pre-wrap }
+.msg-ok { padding:12px; border-radius:8px; background:rgba(74,124,89,.08); border:1px solid var(--success); color:var(--success); font-size:13px; margin-bottom:12px }
+.msg-err { padding:12px; border-radius:8px; background:rgba(196,69,54,.08); border:1px solid var(--error); color:var(--error); font-size:13px; margin-bottom:12px }
+.badge-ft { padding:3px 10px; border-radius:12px; font-size:12px; font-weight:700; background:#D1FAE5; color:#065F46 }
+.badge-pt { padding:3px 10px; border-radius:12px; font-size:12px; font-weight:700; background:#FEF3C7; color:#92400E }
+.total-row { background:var(--forest); color:#fff }
+.total-row td { padding:12px; font-weight:700; font-size:13px; border:none }
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px }
+.role-card { background:var(--s0); border:1px solid var(--border); border-radius:10px; padding:14px }
+.role-row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--border); font-size:12px }
+.week-tabs { display:flex; gap:4px; margin-bottom:12px; background:var(--s2); border-radius:8px; padding:3px; width:fit-content }
+.week-tab { padding:6px 14px; border-radius:6px; border:none; font-size:12px; cursor:pointer; font-family:inherit; background:transparent; color:var(--stone) }
+.week-tab.active { background:var(--s0); color:var(--forest); font-weight:600 }
+.ai-bar { position:fixed; bottom:0; left:0; right:0; background:var(--s0); border-top:1px solid var(--border); padding:10px 20px; z-index:50; display:flex; gap:8px }
+.ai-bar input { flex:1; padding:10px 14px; border-radius:8px; border:1px solid var(--border); font-size:13px; font-family:inherit; background:var(--s1); outline:none }
+.ai-result { background:#FDF8F0; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:8px; max-height:200px; overflow:auto; font-size:13px; white-space:pre-wrap; line-height:1.6 }
+@keyframes spin { to { transform:rotate(360deg) } }
+@keyframes fadeIn { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:translateY(0) } }
+.fade-in { animation:fadeIn .3s }
+#toast { position:fixed; top:80px; right:20px; padding:12px 20px; border-radius:10px; color:#fff; font-size:13px; font-weight:600; z-index:100; box-shadow:0 4px 16px rgba(0,0,0,.15); display:none }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>1-GROUP<span>Staff Planner</span></h1>
+</header>
+
+<main>
+  <!-- Upload Cards -->
+  <div class="grid-2" style="margin-bottom:20px">
+    <div class="card" id="schedule-card">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <span style="font-size:28px">📅</span>
+        <div>
+          <h3>Upload Staff Schedule</h3>
+          <p>CSV or Excel — Name, Department, Shift Times × 7 days</p>
+        </div>
+      </div>
+      <div id="schedule-upload" class="upload-zone">
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px">Drop file here or choose below</div>
+        <div style="font-size:12px;color:var(--stone)">PDF, Excel (.xlsx), or CSV</div>
+        <input type="file" accept=".pdf,.xlsx,.xls,.csv" onchange="handleUpload(this.files[0], 'schedule')">
+      </div>
+      <div id="schedule-status"></div>
+      <div id="schedule-log" class="log" style="display:none"></div>
+    </div>
+
+    <div class="card" id="revenue-card">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <span style="font-size:28px">💰</span>
+        <div>
+          <h3>Upload Revenue Targets</h3>
+          <p>Revenue target sheet — weekly/monthly breakdowns per venue</p>
+        </div>
+      </div>
+      <div id="revenue-upload" class="upload-zone">
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px">Drop file here or choose below</div>
+        <div style="font-size:12px;color:var(--stone)">PDF, Excel (.xlsx), or CSV</div>
+        <input type="file" accept=".pdf,.xlsx,.xls,.csv" onchange="handleUpload(this.files[0], 'revenue')">
+      </div>
+      <div id="revenue-status"></div>
+      <div id="revenue-log" class="log" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- Schedule Results -->
+  <div id="schedule-results" style="display:none"></div>
+
+  <!-- Revenue Results -->
+  <div id="revenue-results" style="display:none"></div>
+
+  <!-- Empty State -->
+  <div id="empty-state" style="text-align:center;padding:40px 20px;color:var(--stone)">
+    <div style="font-size:48px;margin-bottom:12px">📊</div>
+    <p style="font-size:14px">Upload a staff schedule or revenue target sheet above to get started.</p>
+  </div>
+</main>
+
+<!-- AI Bar -->
+<div class="ai-bar" style="flex-direction:column">
+  <div id="ai-result-box" style="display:none"></div>
+  <div style="display:flex;gap:8px">
+    <input id="ai-input" placeholder="Ask AI: staffing analysis, compliance check, cost breakdown..." onkeydown="if(event.key==='Enter')askAI()">
+    <button class="btn btn-primary" onclick="askAI()" id="ai-btn">Ask AI</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════
+   DATA
+   ═══════════════════════════════════════════════════ */
+
+const VENUES = [
+  { id:"1-alfaro", name:"1-Alfaro", colour:"#8B5CF6", area:"Pasir Panjang", capacity:120, avgSpend:{lunch:65,dinner:95}, staffing:{lunch:{Server:3,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":2,Steward:1},dinner:{Server:4,Runner:2,"Host/Hostess":1,Bartender:2,"Kitchen Helper":3,Steward:1}} },
+  { id:"1-altitude-coast", name:"1-Altitude Coast", colour:"#06B6D4", area:"Sentosa", capacity:80, avgSpend:{lunch:55,dinner:80}, staffing:{lunch:{Server:2,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":1,Steward:1},dinner:{Server:3,Runner:1,"Host/Hostess":1,Bartender:2,"Kitchen Helper":2,Steward:1}} },
+  { id:"1-altitude-melaka", name:"1-Altitude Melaka", colour:"#6366F1", area:"Melaka", capacity:300, avgSpend:{afternoon:40,dinner:60}, staffing:{afternoon:{Bartender:3,Server:4,Runner:2,"Host/Hostess":2},dinner:{Bartender:4,Server:6,Runner:3,"Host/Hostess":2,"Kitchen Helper":4,Steward:2}} },
+  { id:"1-arden", name:"1-Arden", colour:"#EC4899", area:"Raffles Place", capacity:230, avgSpend:{lunch:68,dinner:120}, staffing:{lunch:{Server:3,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":2,Steward:1},dinner:{Server:4,Runner:2,"Host/Hostess":1,Bartender:1,"Kitchen Helper":3,Steward:1}} },
+  { id:"1-atico", name:"1-Atico", colour:"#F59E0B", area:"Orchard", capacity:120, avgSpend:{lunch:60,dinner:90}, staffing:{lunch:{Server:3,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":2,Steward:1},dinner:{Server:4,Runner:2,"Host/Hostess":1,Bartender:2,"Kitchen Helper":3,Steward:1}} },
+  { id:"1-flowerhill", name:"1-Flowerhill", colour:"#10B981", area:"Sentosa", capacity:90, avgSpend:{lunch:55,dinner:80}, staffing:{lunch:{Server:2,Runner:1,"Host/Hostess":1,"Kitchen Helper":2,Steward:1},dinner:{Server:3,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":2,Steward:1}} },
+  { id:"monti", name:"Monti", colour:"#F97316", area:"Marina Bay", capacity:180, avgSpend:{lunch:65,dinner:110}, staffing:{lunch:{Server:3,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":2,Steward:1},dinner:{Server:4,Runner:2,"Host/Hostess":1,Bartender:2,"Kitchen Helper":3,Steward:1}} },
+  { id:"the-alkaff-mansion", name:"The Alkaff Mansion", colour:"#84CC16", area:"Telok Blangah", capacity:200, avgSpend:{lunch:55,dinner:85}, staffing:{lunch:{Server:3,Runner:1,"Host/Hostess":1,"Kitchen Helper":2,Steward:1,"Banquet Staff":2},dinner:{Server:4,Runner:2,"Host/Hostess":1,Bartender:1,"Kitchen Helper":3,Steward:1,"Banquet Staff":3}} },
+  { id:"the-garage", name:"The Garage", colour:"#EF4444", area:"Botanic Gardens", capacity:90, avgSpend:{lunch:55,dinner:80}, staffing:{lunch:{Server:2,Runner:1,"Host/Hostess":1,"Kitchen Helper":2,Steward:1},dinner:{Server:3,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":2,Steward:1}} },
+  { id:"the-riverhouse", name:"The Riverhouse", colour:"#14B8A6", area:"Clarke Quay", capacity:100, avgSpend:{lunch:50,dinner:75}, staffing:{lunch:{Server:2,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":2,Steward:1},dinner:{Server:3,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":2,Steward:1}} },
+  { id:"the-summerhouse", name:"The Summerhouse", colour:"#059669", area:"Seletar", capacity:100, avgSpend:{lunch:55,dinner:80}, staffing:{lunch:{Server:2,Runner:1,"Host/Hostess":1,Barista:1,"Kitchen Helper":2,Steward:1},dinner:{Server:3,Runner:1,"Host/Hostess":1,Bartender:1,"Kitchen Helper":2,Steward:1}} },
+];
+
+const COVERS_PER_STAFF = { Server:16, Runner:24, Bartender:30, "Kitchen Helper":40, Steward:60, "Host/Hostess":120, "Banquet Staff":20, Barista:30, Cashier:60 };
+
+const ROLES = {Server:{icon:"🍽️",colour:"#3B82F6"},Runner:{icon:"🏃",colour:"#06B6D4"},Bartender:{icon:"🍸",colour:"#F59E0B"},"Kitchen Helper":{icon:"🔪",colour:"#EF4444"},Steward:{icon:"🧹",colour:"#6B7280"},"Host/Hostess":{icon:"👋",colour:"#10B981"},"Banquet Staff":{icon:"🎪",colour:"#8B5CF6"},Barista:{icon:"☕",colour:"#92400E"},Cashier:{icon:"💳",colour:"#64748B"}};
+
+const DEPT_MAP = {"kaarla":"1-arden","oumi":"1-arden","sol & luna":"1-arden","sol and luna":"1-arden","1-arden bar op":"1-arden","bar op":"1-arden","bar operations":"1-arden","concierge":"1-arden"};
+
+const SCHEDULE_PROMPT = `You are a schedule data extractor for 1-Group Singapore hospitality.
+Extract employees and shifts from this schedule data.
+VENUES: 1-Alfaro, 1-Altitude Coast, 1-Altitude Melaka, 1-Arden, 1-Atico, 1-Flowerhill, Monti, The Alkaff Mansion, The Garage, The Riverhouse, The Summerhouse.
+DEPARTMENTS within 1-Arden: Kaarla, Oumi, Sol & Luna, 1-Arden Bar Op, Concierge. Map ALL to venue "1-Arden".
+COLUMN FORMAT: NAME, DEPARTMENT, then repeating per day: SHIFT TIME, BREAK TIME (HRS), WORK HOUR.
+SHIFT TIME: "10:00 - 22:30" style ranges, or codes L/Lunch=11:30-14:30, D/Dinner=17:30-22:30, OFF/RD/PH=rest day (skip).
+Roles: Server, Runner, Bartender, Kitchen Helper, Steward, Host/Hostess, Banquet Staff, Barista, Cashier.
+Rates: Server=14, Bartender=16, Kitchen Helper=12.5, Runner=11.5, Steward=11, Host=14.5.
+CRITICAL: Determine actual calendar dates. Use YYYY-MM-DD.
+RESPOND ONLY valid JSON, no markdown, no backticks:
+{"venue":"1-Arden","weekStart":"YYYY-MM-DD","weekEnd":"YYYY-MM-DD","employees":[{"name":"Name","roles":["Server"],"type":"full-time","rate":14,"department":"Kaarla","shifts":[{"date":"YYYY-MM-DD","start":"17:30","end":"22:30","role":"Server","breakMins":60}]}],"notes":"observations"}`;
+
+const REVENUE_PROMPT = `You are a revenue data extractor for 1-Group Singapore.
+Extract revenue targets per month, week, venue. Venues: 1-Alfaro, 1-Altitude Coast, 1-Altitude Melaka, 1-Arden, 1-Atico, 1-Flowerhill, Monti, The Alkaff Mansion, The Garage, The Riverhouse, The Summerhouse.
+Departments within 1-Arden (Kaarla, Oumi, Sol & Luna) map to "1-Arden".
+Look for weekly breakdowns. Split by meal period if available. Do NOT double-count totals.
+RESPOND ONLY valid JSON, no markdown, no backticks:
+{"currency":"SGD","period":{"year":2026,"month":"April","monthNum":4},"venues":[{"venue":"1-Arden","weeks":[{"week":1,"weekLabel":"W1","mealPeriods":[{"period":"lunch","revenueTarget":15000},{"period":"dinner","revenueTarget":28000}],"totalTarget":43000}]}],"summary":{"totalMonthlyTarget":500000},"notes":"observations"}`;
+
+let scheduleData = null;
+let revenueData = null;
+
+/* ═══════════════════════════════════════════════════
+   HELPERS
+   ═══════════════════════════════════════════════════ */
+
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  el.style.background = type === 'success' ? 'var(--success)' : type === 'error' ? 'var(--error)' : 'var(--forest)';
+  el.style.animation = 'fadeIn .3s';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+function log(mode, msg) {
+  const logEl = document.getElementById(`${mode}-log`);
+  if (logEl) {
+    logEl.style.display = 'block';
+    logEl.textContent += new Date().toLocaleTimeString() + ' ' + msg + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  console.log(`[${mode}] ${msg}`);
+}
+
+function resolveVenue(dept) {
+  if (!dept) return null;
+  const d = dept.toLowerCase().trim();
+  if (DEPT_MAP[d]) return DEPT_MAP[d];
+  const v = VENUES.find(v => v.name.toLowerCase() === d || v.name.toLowerCase().includes(d));
+  return v ? v.id : null;
+}
+
+function calcStaffing(revenue, venueId, mealPeriod) {
+  const v = VENUES.find(x => x.id === venueId);
+  if (!v || !revenue || revenue <= 0) return { covers:0, totalStaff:0, ft:0, pt:0, roles:{}, avgSpend:0 };
+  const avgSpend = v.avgSpend[mealPeriod] || v.avgSpend.dinner || 70;
+  const covers = Math.round(revenue / avgSpend);
+  const template = v.staffing[mealPeriod] || v.staffing.dinner || {};
+  const roles = {};
+  let total = 0;
+  Object.entries(COVERS_PER_STAFF).forEach(([role, cpp]) => {
+    const tc = template[role] || 0;
+    if (tc > 0) {
+      const scale = Math.max(0.5, covers / (v.capacity * 0.7));
+      const n = Math.max(1, Math.ceil(tc * scale));
+      roles[role] = n; total += n;
+    } else if (covers >= cpp) {
+      const n = Math.ceil(covers / cpp);
+      roles[role] = n; total += n;
+    }
+  });
+  return { covers, totalStaff: total, ft: Math.ceil(total * 0.6), pt: total - Math.ceil(total * 0.6), roles, avgSpend };
+}
+
+/* ═══════════════════════════════════════════════════
+   FILE UPLOAD
+   ═══════════════════════════════════════════════════ */
+
+async function handleUpload(file, mode) {
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  const statusEl = document.getElementById(`${mode}-status`);
+  const logEl = document.getElementById(`${mode}-log`);
+  logEl.textContent = '';
+  logEl.style.display = 'block';
+
+  log(mode, `File: ${file.name} (${ext}, ${(file.size/1024).toFixed(1)}KB)`);
+
+  if (!['pdf','xlsx','xls','csv'].includes(ext)) {
+    statusEl.innerHTML = '<div class="msg-err">Unsupported file type. Use PDF, Excel, or CSV.</div>';
+    return;
+  }
+
+  // Show spinner
+  statusEl.innerHTML = `
+    <div style="padding:24px;text-align:center">
+      <div class="spinner"></div>
+      <div style="font-size:14px;font-weight:600" id="${mode}-spin-msg">Reading file…</div>
+      <div style="font-size:12px;color:var(--stone);margin-top:4px">This may take 15–30 seconds</div>
+    </div>`;
+
+  try {
+    let userContent;
+    const prompt = mode === 'revenue' ? REVENUE_PROMPT : SCHEDULE_PROMPT;
+
+    if (ext === 'pdf') {
+      log(mode, 'Reading PDF as base64...');
+      const b64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result.split(',')[1]);
+        r.onerror = () => rej(new Error('Failed to read PDF'));
+        r.readAsDataURL(file);
+      });
+      log(mode, `Base64 ready (${(b64.length/1024).toFixed(0)}KB)`);
+      userContent = [
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } },
+        { type: "text", text: `Extract data from "${file.name}". Return ONLY valid JSON.` }
+      ];
+    } else {
+      // CSV or Excel → read as text
+      let text = '';
+      if (ext === 'csv') {
+        log(mode, 'Reading CSV as text...');
+        text = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error('Failed to read CSV'));
+          r.readAsText(file);
+        });
+      } else {
+        log(mode, 'Parsing Excel with SheetJS...');
+        const buf = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error('Failed to read Excel'));
+          r.readAsArrayBuffer(file);
+        });
+        const wb = XLSX.read(buf, { type: 'array' });
+        const parts = [];
+        wb.SheetNames.forEach(name => {
+          const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false });
+          if (csv.trim()) parts.push(`--- Sheet: ${name} ---\n${csv}`);
+        });
+        text = parts.join('\n\n');
+        log(mode, `Parsed ${wb.SheetNames.length} sheets`);
+      }
+
+      log(mode, `Text ready: ${text.length} chars, ${text.split('\\n').length} lines`);
+      if (text.length > 80000) text = text.substring(0, 80000) + '\n...(truncated)';
+
+      // Simple string content — NOT array
+      userContent = `File: "${file.name}"\n\n${text}\n\nExtract all data. Return ONLY valid JSON, no markdown.`;
+    }
+
+    // Call API
+    const spinMsg = document.getElementById(`${mode}-spin-msg`);
+    if (spinMsg) spinMsg.textContent = 'AI extracting data…';
+    log(mode, 'Calling Claude API via /api/claude...');
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120000);
+
+    const resp = await fetch('/api/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 8000,
+        system: prompt,
+        messages: [{ role: 'user', content: userContent }]
+      })
+    });
+    clearTimeout(timer);
+
+    log(mode, `API status: ${resp.status}`);
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`API ${resp.status}: ${errText.substring(0, 200)}`);
+    }
+
+    const data = await resp.json();
+    const raw = data.content?.[0]?.text || '';
+    log(mode, `Response: ${raw.substring(0, 100)}...`);
+
+    if (!raw) throw new Error('Empty AI response');
+
+    let cleaned = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    let result;
+    try { result = JSON.parse(cleaned); }
+    catch { const m = cleaned.match(/\{[\s\S]*\}/); if (m) result = JSON.parse(m[0]); else throw new Error('Response not valid JSON'); }
+
+    log(mode, 'Parse successful!');
+    showPreview(mode, result);
+
+  } catch (err) {
+    log(mode, `ERROR: ${err.message}`);
+    const msg = err.name === 'AbortError' ? 'Timed out after 2 minutes. Try a smaller file.' : err.message;
+    statusEl.innerHTML = `<div class="msg-err">${msg}</div>
+      <button class="btn btn-ghost" onclick="resetUpload('${mode}')" style="margin-top:8px;width:100%">Try Again</button>`;
+  }
+}
+
+function resetUpload(mode) {
+  document.getElementById(`${mode}-status`).innerHTML = '';
+  document.getElementById(`${mode}-log`).style.display = 'none';
+  document.getElementById(`${mode}-log`).textContent = '';
+  document.getElementById(`${mode}-upload`).style.display = 'block';
+}
+
+/* ═══════════════════════════════════════════════════
+   PREVIEW & IMPORT
+   ═══════════════════════════════════════════════════ */
+
+let pendingData = {};
+
+function showPreview(mode, data) {
+  pendingData[mode] = data;
+  const el = document.getElementById(`${mode}-status`);
+
+  if (mode === 'schedule') {
+    const emps = data.employees || [];
+    let rows = emps.map(e => `<tr>
+      <td style="font-weight:600">${e.name}</td>
+      <td style="color:var(--stone)">${e.department||'—'}</td>
+      <td>${(e.roles||[]).join(', ')}</td>
+      <td>$${e.rate||'—'}/hr</td>
+      <td style="font-weight:600">${e.shifts?.length||0}</td>
+    </tr>`).join('');
+
+    el.innerHTML = `
+      <div class="msg-ok">✅ Extracted ${emps.length} employees · ${data.venue||'?'} · ${data.weekStart||'?'} → ${data.weekEnd||'?'}</div>
+      ${data.notes ? `<div style="font-size:12px;color:var(--stone);font-style:italic;margin-bottom:8px">${data.notes}</div>` : ''}
+      <div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:12px">
+        <table><thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Rate</th><th>Shifts</th></tr></thead><tbody>${rows}</tbody></table>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="doImport('schedule')" style="flex:1">✅ Import ${emps.length} Employees & Shifts</button>
+        <button class="btn btn-ghost" onclick="resetUpload('schedule')">Cancel</button>
+      </div>`;
+
+  } else {
+    const venues = data.venues || [];
+    let rows = venues.flatMap(v => (v.weeks||[]).flatMap(w => {
+      const periods = w.mealPeriods?.length ? w.mealPeriods : [{period:'total',revenueTarget:w.totalTarget}];
+      return periods.map(mp => `<tr>
+        <td style="font-weight:600">${v.venue}</td>
+        <td>${w.weekLabel||'W'+w.week}</td>
+        <td style="text-transform:capitalize">${mp.period}</td>
+        <td style="font-weight:600">$${(mp.revenueTarget||0).toLocaleString()}</td>
+      </tr>`);
+    })).join('');
+
+    el.innerHTML = `
+      <div class="msg-ok">✅ ${data.period?.month||'?'} ${data.period?.year||''} · ${data.currency||'SGD'} · ${venues.length} venues</div>
+      <div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:12px">
+        <table><thead><tr><th>Venue</th><th>Week</th><th>Period</th><th>Target</th></tr></thead><tbody>${rows}</tbody></table>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="doImport('revenue')" style="flex:1">✅ Import & Calculate Staffing</button>
+        <button class="btn btn-ghost" onclick="resetUpload('revenue')">Cancel</button>
+      </div>`;
+  }
+}
+
+function doImport(mode) {
+  const data = pendingData[mode];
+  if (!data) return;
+
+  if (mode === 'schedule') {
+    scheduleData = data;
+    renderSchedule();
+    toast(`Imported ${data.employees?.length||0} employees`, 'success');
+  } else {
+    revenueData = data;
+    renderRevenue();
+    toast(`Revenue imported: ${data.venues?.length||0} venues`, 'success');
+  }
+
+  resetUpload(mode);
+  document.getElementById('empty-state').style.display = 'none';
+}
+
+/* ═══════════════════════════════════════════════════
+   RENDER RESULTS
+   ═══════════════════════════════════════════════════ */
+
+function renderSchedule() {
+  if (!scheduleData) { document.getElementById('schedule-results').style.display = 'none'; return; }
+  const el = document.getElementById('schedule-results');
+  el.style.display = 'block';
+  const emps = scheduleData.employees || [];
+  const totalShifts = emps.reduce((a, e) => a + (e.shifts?.length || 0), 0);
+  const depts = [...new Set(emps.map(e => e.department).filter(Boolean))];
+
+  let rows = emps.map(e => {
+    const hrs = (e.shifts||[]).reduce((a, s) => {
+      if (!s.start || !s.end) return a;
+      const [sh,sm] = s.start.split(':').map(Number);
+      const [eh,em] = s.end.split(':').map(Number);
+      let h = (eh*60+em - sh*60-sm)/60; if(h<0) h+=24;
+      return a + h - (s.breakMins||0)/60;
+    }, 0);
+    const over = hrs > 44;
+    return `<tr>
+      <td style="font-weight:600">${e.name}</td>
+      <td style="color:var(--stone)">${e.department||'—'}</td>
+      <td>${(e.roles||[]).join(', ')}</td>
+      <td>${e.type||'FT'}</td>
+      <td>$${e.rate||'—'}/hr</td>
+      <td>${e.shifts?.length||0}</td>
+      <td style="font-weight:${over?700:400};color:${over?'var(--error)':'inherit'}">${hrs.toFixed(1)}h ${over?'⚠️':''}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="font-size:16px;font-weight:700">📅 Schedule: ${scheduleData.venue||'?'} · ${scheduleData.weekStart||'?'} → ${scheduleData.weekEnd||'?'}</h3>
+      <button class="btn btn-danger" onclick="clearSchedule()" style="font-size:12px;padding:6px 12px">Clear</button>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-label">EMPLOYEES</div><div class="stat-value">${emps.length}</div></div>
+      <div class="stat"><div class="stat-label">TOTAL SHIFTS</div><div class="stat-value">${totalShifts}</div></div>
+      <div class="stat"><div class="stat-label">DEPARTMENTS</div><div class="stat-value">${depts.length}</div><div class="stat-sub">${depts.join(', ')}</div></div>
+      <div class="stat"><div class="stat-label">VENUE</div><div class="stat-value">${scheduleData.venue||'?'}</div></div>
+    </div>
+    <div class="card" style="padding:0;overflow:auto">
+      <table><thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Type</th><th>Rate</th><th>Shifts</th><th>Total Hrs</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    </div>`;
+}
+
+function renderRevenue() {
+  if (!revenueData) { document.getElementById('revenue-results').style.display = 'none'; return; }
+  const el = document.getElementById('revenue-results');
+  el.style.display = 'block';
+  const venues = revenueData.venues || [];
+
+  // Totals
+  let tRev=0, tCov=0, tFT=0, tPT=0, tAll=0;
+  let tableRows = '';
+  let roleCards = '';
+
+  venues.forEach((v, vi) => {
+    const vo = VENUES.find(x => x.name.toLowerCase()===v.venue?.toLowerCase() || x.name.toLowerCase().includes(v.venue?.toLowerCase()||''));
+    const rows = [];
+    (v.weeks||[]).forEach(w => {
+      if (w.mealPeriods?.length) {
+        w.mealPeriods.forEach(mp => {
+          const rev = mp.revenueTarget||0; tRev += rev;
+          const s = calcStaffing(rev, vo?.id||'1-arden', mp.period);
+          tCov+=s.covers; tFT+=s.ft; tPT+=s.pt; tAll+=s.totalStaff;
+          rows.push({period:mp.period, rev, s});
+        });
+      } else if (w.totalTarget) {
+        tRev += w.totalTarget;
+        const s = calcStaffing(w.totalTarget, vo?.id||'1-arden', 'dinner');
+        tCov+=s.covers; tFT+=s.ft; tPT+=s.pt; tAll+=s.totalStaff;
+        rows.push({period:'all-day', rev:w.totalTarget, s});
+      }
+    });
+    if (!rows.length) rows.push({period:'—',rev:0,s:{covers:0,ft:0,pt:0,totalStaff:0,avgSpend:0}});
+
+    rows.forEach((r, ri) => {
+      tableRows += `<tr style="border-bottom:${ri===rows.length-1?'2':'1'}px solid var(--border)">`;
+      if (ri === 0) tableRows += `<td rowspan="${rows.length}" style="font-weight:600;border-right:1px solid var(--border);vertical-align:top">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${vo?.colour||'#999'};margin-right:6px"></span>${v.venue}
+        ${vo?`<div style="font-size:11px;color:var(--stone);font-weight:400;margin-top:2px">${vo.area} · ${vo.capacity} pax</div>`:''}
+      </td>`;
+      tableRows += `<td style="text-transform:capitalize">${r.period==='all-day'?'All Day':r.period}</td>
+        <td style="font-weight:600">${r.rev>0?'$'+r.rev.toLocaleString():'—'}</td>
+        <td style="color:var(--stone)">${r.s.avgSpend>0?'$'+r.s.avgSpend:'—'}</td>
+        <td style="font-weight:600">${r.s.covers>0?r.s.covers.toLocaleString():'—'}</td>
+        <td><span class="badge-ft">${r.s.ft}</span></td>
+        <td><span class="badge-pt">${r.s.pt}</span></td>
+        <td style="font-size:14px;font-weight:700">${r.s.totalStaff}</td></tr>`;
+    });
+
+    // Role breakdown card
+    const combined = {};
+    (v.weeks||[]).forEach(w => (w.mealPeriods||[]).forEach(mp => {
+      const s = calcStaffing(mp.revenueTarget||0, vo?.id||'1-arden', mp.period);
+      Object.entries(s.roles||{}).forEach(([role,c]) => { combined[role] = (combined[role]||0) + c; });
+    }));
+    const roleRows = Object.entries(combined).sort((a,b)=>b[1]-a[1]).map(([role,c]) => {
+      const r = ROLES[role]||{icon:'',colour:'#999'};
+      return `<div class="role-row"><span>${r.icon} ${role}</span><span style="font-weight:700;color:${r.colour}">${c}</span></div>`;
+    }).join('') || '<div style="font-size:12px;color:var(--stone)">No data</div>';
+    roleCards += `<div class="role-card"><div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      <span style="width:10px;height:10px;border-radius:3px;background:${vo?.colour||'#999'}"></span>
+      <span style="font-weight:600;font-size:13px">${v.venue}</span></div>${roleRows}</div>`;
+  });
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="font-size:16px;font-weight:700">💰 Revenue → Staffing: ${revenueData.period?.month||'?'} ${revenueData.period?.year||''}</h3>
+      <button class="btn btn-danger" onclick="clearRevenue()" style="font-size:12px;padding:6px 12px">Clear</button>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="stat-label">PROJECTED REVENUE</div><div class="stat-value">$${tRev.toLocaleString()}</div></div>
+      <div class="stat"><div class="stat-label">EST. COVERS</div><div class="stat-value">${tCov.toLocaleString()}</div></div>
+      <div class="stat"><div class="stat-label">FULL-TIME NEEDED</div><div class="stat-value">${tFT}</div></div>
+      <div class="stat"><div class="stat-label">PART-TIME NEEDED</div><div class="stat-value">${tPT}</div></div>
+    </div>
+    <div class="card" style="padding:0;overflow:auto;margin-bottom:16px">
+      <table style="min-width:800px"><thead><tr><th>Venue</th><th>Period</th><th>Revenue</th><th>Avg Spend</th><th>Covers</th><th>Full-Time</th><th>Part-Time</th><th>Total</th></tr></thead>
+      <tbody>${tableRows}
+        <tr class="total-row"><td colspan="2">TOTAL</td><td>$${tRev.toLocaleString()}</td><td style="color:rgba(255,255,255,.6)">—</td><td>${tCov.toLocaleString()}</td><td>${tFT}</td><td>${tPT}</td><td style="font-size:15px;font-weight:800">${tAll}</td></tr>
+      </tbody></table>
+    </div>
+    <h3 style="font-size:14px;font-weight:600;margin-bottom:10px">Role Breakdown by Venue</h3>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">${roleCards}</div>`;
+}
+
+function clearSchedule() { scheduleData=null; renderSchedule(); checkEmpty(); toast('Schedule cleared','info'); }
+function clearRevenue() { revenueData=null; renderRevenue(); checkEmpty(); toast('Revenue cleared','info'); }
+function checkEmpty() { document.getElementById('empty-state').style.display = (!scheduleData && !revenueData) ? 'block' : 'none'; }
+
+/* ═══════════════════════════════════════════════════
+   AI
+   ═══════════════════════════════════════════════════ */
+
+async function askAI() {
+  const input = document.getElementById('ai-input');
+  const q = input.value.trim();
+  if (!q) return;
+  const btn = document.getElementById('ai-btn');
+  btn.textContent = 'Thinking…'; btn.disabled = true;
+  const box = document.getElementById('ai-result-box');
+  box.style.display = 'none';
+
+  try {
+    const ctx = [];
+    if (scheduleData) { ctx.push(`Schedule: ${scheduleData.venue}, ${scheduleData.employees?.length||0} employees`); }
+    if (revenueData) { ctx.push(`Revenue: ${revenueData.period?.month} ${revenueData.period?.year}, ${revenueData.venues?.length||0} venues`); }
+
+    const resp = await fetch('/api/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1500,
+        system: 'You are an HR staffing assistant for 1-Group Singapore. Be concise. SG Employment Act: max 44hrs/wk, 1 rest day/wk, OT=1.5x.',
+        messages: [{ role: 'user', content: ctx.join('\n') + '\n\n' + q }]
+      })
+    });
+    const data = await resp.json();
+    const text = data.content?.[0]?.text || 'No response.';
+    box.innerHTML = `<div class="ai-result"><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="font-weight:700;font-size:12px;color:var(--forest)">✨ AI</span><button onclick="document.getElementById('ai-result-box').style.display='none'" style="background:none;border:none;cursor:pointer;color:var(--stone)">✕</button></div>${text}</div>`;
+    box.style.display = 'block';
+  } catch {
+    box.innerHTML = '<div class="ai-result">AI temporarily unavailable.</div>';
+    box.style.display = 'block';
+  }
+  btn.textContent = 'Ask AI'; btn.disabled = false;
+  input.value = '';
+}
+
+/* ═══════════════════════════════════════════════════
+   DRAG & DROP
+   ═══════════════════════════════════════════════════ */
+
+['schedule','revenue'].forEach(mode => {
+  const zone = document.getElementById(`${mode}-upload`);
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+  zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag'); handleUpload(e.dataTransfer?.files?.[0], mode); });
+});
+</script>
+</body>
+</html>
