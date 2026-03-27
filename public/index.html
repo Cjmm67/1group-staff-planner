@@ -118,11 +118,32 @@ details[open] summary::before { content:'▾ ' }
     </div>
   </div>
 
+  <!-- Event Order Upload -->
+  <div class="card" style="margin-bottom:16px" id="eo-card">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="font-size:28px">🎪</span>
+      <div>
+        <h3>Upload Event Order (EO)</h3>
+        <p>Wedding or corporate event PDF — extracts pax count and checks staffing ratio (1 staff per 12 guests)</p>
+      </div>
+    </div>
+    <div id="eo-upload" class="upload-zone">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px">Drop EO PDF here or choose below</div>
+      <div style="font-size:12px;color:var(--stone)">PDF format</div>
+      <input type="file" accept=".pdf,.xlsx,.xls,.csv" onchange="handleUpload(this.files[0], 'eo')">
+    </div>
+    <div id="eo-status"></div>
+    <div id="eo-log" class="log" style="display:none"></div>
+  </div>
+
   <!-- Schedule Results -->
   <div id="schedule-results" style="display:none"></div>
 
   <!-- Revenue Results -->
   <div id="revenue-results" style="display:none"></div>
+
+  <!-- EO Results -->
+  <div id="eo-results" style="display:none"></div>
 
   <!-- Saved Reports -->
   <div id="saved-reports-section" class="card" style="margin-bottom:16px">
@@ -346,8 +367,19 @@ Look for weekly breakdowns. Split by meal period if available. Do NOT double-cou
 RESPOND ONLY valid JSON, no markdown, no backticks:
 {"currency":"SGD","period":{"year":2026,"month":"April","monthNum":4},"venues":[{"venue":"1-Arden","weeks":[{"week":1,"weekLabel":"W1","mealPeriods":[{"period":"lunch","revenueTarget":15000},{"period":"dinner","revenueTarget":28000}],"totalTarget":43000}]}],"summary":{"totalMonthlyTarget":500000},"notes":"observations"}`;
 
+const EO_PROMPT = `You are an Event Order (EO) data extractor for 1-Group Singapore hospitality.
+Extract key event details from this Event Order document.
+Look for: event name/type (wedding, corporate, dinner, cocktail etc), date, time (start and end), venue/location, guaranteed/expected number of guests (pax), client name, event coordinator, setup style (banquet, cocktail, theatre etc), any staff requirements mentioned, menu type, and special notes.
+The PAX/guest count is the most critical field — look for "Guaranteed Pax", "No. of Pax", "Expected Guests", "Covers", "Seating" or similar.
+RESPOND ONLY valid JSON, no markdown, no backticks:
+{"eventName":"Wedding Reception - Smith & Jones","eventType":"wedding","date":"2026-01-10","startTime":"18:00","endTime":"23:00","venue":"The Alkaff Mansion","pax":120,"guaranteedPax":120,"client":"Mr & Mrs Smith","coordinator":"Sarah Lee","setupStyle":"banquet","menuType":"Set Menu 5 Course","specialNotes":"Live band 8-10pm, sparklers at entrance","staffRequirements":""}`;
+
+// Events staffing rule: 1 staff per 12 guests (excluding managers and concierge)
+const EVENTS_STAFF_RATIO = 12;
+
 let scheduleData = null;
 let revenueData = null;
+let eoData = null;
 
 /* ═══════════════════════════════════════════════════
    HELPERS
@@ -431,7 +463,7 @@ async function handleUpload(file, mode) {
 
   try {
     let userContent;
-    const prompt = mode === 'revenue' ? REVENUE_PROMPT : SCHEDULE_PROMPT;
+    const prompt = mode === 'revenue' ? REVENUE_PROMPT : mode === 'eo' ? EO_PROMPT : SCHEDULE_PROMPT;
 
     if (ext === 'pdf') {
       log(mode, 'Reading PDF as base64...');
@@ -586,6 +618,34 @@ function showPreview(mode, data) {
         <button class="btn btn-ghost" onclick="resetUpload('schedule')">Cancel</button>
       </div>`;
 
+  } else if (mode === 'eo') {
+    const pax = data.guaranteedPax || data.pax || 0;
+    const staffNeeded = Math.ceil(pax / EVENTS_STAFF_RATIO);
+    el.innerHTML = `
+      <div class="msg-ok">✅ Event Order extracted</div>
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">
+        <div style="font-size:15px;font-weight:700;margin-bottom:8px">${data.eventName||'Event'}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">
+          <div><span style="color:var(--stone)">Type:</span> <strong>${data.eventType||'—'}</strong></div>
+          <div><span style="color:var(--stone)">Date:</span> <strong>${data.date||'—'}</strong></div>
+          <div><span style="color:var(--stone)">Time:</span> <strong>${data.startTime||'?'} – ${data.endTime||'?'}</strong></div>
+          <div><span style="color:var(--stone)">Venue:</span> <strong>${data.venue||'—'}</strong></div>
+          <div><span style="color:var(--stone)">Pax:</span> <strong style="font-size:16px;color:var(--forest)">${pax}</strong></div>
+          <div><span style="color:var(--stone)">Client:</span> <strong>${data.client||'—'}</strong></div>
+          <div><span style="color:var(--stone)">Setup:</span> <strong>${data.setupStyle||'—'}</strong></div>
+          <div><span style="color:var(--stone)">Menu:</span> <strong>${data.menuType||'—'}</strong></div>
+        </div>
+        ${data.specialNotes ? '<div style="margin-top:8px;font-size:11px;color:var(--stone);font-style:italic">Notes: ' + data.specialNotes + '</div>' : ''}
+        <div style="margin-top:10px;padding:8px;background:var(--s2);border-radius:6px">
+          <div style="font-size:12px;font-weight:700">Staffing Rule: 1 staff per ${EVENTS_STAFF_RATIO} guests (excl. managers & concierge)</div>
+          <div style="font-size:14px;font-weight:700;color:var(--forest);margin-top:4px">${pax} pax ÷ ${EVENTS_STAFF_RATIO} = ${staffNeeded} service staff required</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="doImport('eo')" style="flex:1">✅ Import Event & Check Staffing</button>
+        <button class="btn btn-ghost" onclick="resetUpload('eo')">Cancel</button>
+      </div>`;
+
   } else {
     const venues = data.venues || [];
     let rows = venues.flatMap(v => (v.weeks||[]).flatMap(w => {
@@ -617,11 +677,15 @@ function doImport(mode) {
   if (mode === 'schedule') {
     scheduleData = data;
     renderSchedule();
-    toast(`Imported ${data.employees?.length||0} employees`, 'success');
+    toast('Imported ' + (data.employees?.length||0) + ' employees', 'success');
+  } else if (mode === 'eo') {
+    eoData = data;
+    renderEO();
+    toast('Event order imported: ' + (data.eventName || 'Event'), 'success');
   } else {
     revenueData = data;
     renderRevenue();
-    toast(`Revenue imported: ${data.venues?.length||0} venues`, 'success');
+    toast('Revenue imported: ' + (data.venues?.length||0) + ' venues', 'success');
   }
 
   resetUpload(mode);
@@ -1089,7 +1153,124 @@ function renderRevenue() {
 
 function clearSchedule() { scheduleData=null; renderSchedule(); checkEmpty(); toast('Schedule cleared','info'); }
 function clearRevenue() { revenueData=null; renderRevenue(); checkEmpty(); toast('Revenue cleared','info'); }
-function checkEmpty() { document.getElementById('empty-state').style.display = (!scheduleData && !revenueData) ? 'block' : 'none'; }
+function clearEO() { eoData=null; renderEO(); checkEmpty(); toast('Event order cleared','info'); }
+function checkEmpty() { document.getElementById('empty-state').style.display = (!scheduleData && !revenueData && !eoData) ? 'block' : 'none'; }
+
+/* ═══════════════════════════════════════════════════
+   RENDER EO — Event Order Staffing Check
+   ═══════════════════════════════════════════════════ */
+
+function renderEO() {
+  const el = document.getElementById('eo-results');
+  if (!eoData) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+
+  const pax = eoData.guaranteedPax || eoData.pax || 0;
+  const staffNeeded = Math.ceil(pax / EVENTS_STAFF_RATIO);
+
+  // Cross-reference with schedule if loaded — find staff assigned to the event date
+  let assignedStaff = [];
+  let scheduleMatch = false;
+  if (scheduleData && eoData.date) {
+    const emps = scheduleData.employees || [];
+    emps.forEach(function(emp) {
+      (emp.shifts || []).forEach(function(sh) {
+        if (sh.date === eoData.date) {
+          // Check if shift overlaps with event time
+          const cat = classifyStaff(emp);
+          if (cat !== 'manager') { // Exclude managers per rule
+            assignedStaff.push({
+              name: emp.name,
+              department: emp.department || '',
+              role: emp.role || '',
+              type: emp.type || 'full-time',
+              shift: sh.start + '-' + sh.end,
+              category: cat
+            });
+          }
+        }
+      });
+    });
+    scheduleMatch = true;
+  }
+
+  const serviceStaff = assignedStaff.filter(function(s) { return s.category !== 'manager'; }).length;
+  const surplus = serviceStaff - staffNeeded;
+  const complianceStatus = serviceStaff >= staffNeeded ? 'ok' : 'fail';
+
+  // Build staff table if we have schedule data
+  let staffTableHtml = '';
+  if (scheduleMatch && assignedStaff.length > 0) {
+    let staffRows = '';
+    assignedStaff.forEach(function(s) {
+      const catBadge = s.category === 'barman' ? '<span style="background:#FEF3C7;color:#92400E;font-size:8px;padding:1px 4px;border-radius:3px">BAR</span>'
+        : s.category === 'pt' ? '<span style="background:#FDE68A;color:#92400E;font-size:8px;padding:1px 4px;border-radius:3px">PT</span>'
+        : '';
+      staffRows += '<tr><td style="font-weight:600">' + s.name + ' ' + catBadge + '</td><td style="color:var(--stone)">' + s.department + '</td><td>' + s.role + '</td><td>' + s.shift + '</td></tr>';
+    });
+    staffTableHtml = '<div style="margin-top:12px"><h4 style="font-size:13px;font-weight:600;margin-bottom:6px">Service Staff on ' + eoData.date + ' (excl. managers)</h4><div style="overflow:auto;border:1px solid var(--border);border-radius:8px"><table><thead><tr><th>Name</th><th>Dept</th><th>Role</th><th>Shift</th></tr></thead><tbody>' + staffRows + '</tbody></table></div></div>';
+  } else if (scheduleMatch) {
+    staffTableHtml = '<div style="margin-top:12px;padding:12px;background:rgba(217,119,6,.06);border:1px solid var(--warning);border-radius:8px;font-size:12px;color:var(--warning)">⚠️ No staff found on schedule for ' + eoData.date + '. Upload the matching week schedule to cross-reference.</div>';
+  } else {
+    staffTableHtml = '<div style="margin-top:12px;padding:12px;background:var(--s2);border-radius:8px;font-size:12px;color:var(--stone)">💡 Upload a staff schedule covering ' + (eoData.date || 'event date') + ' to automatically check assigned headcount against the 1:' + EVENTS_STAFF_RATIO + ' rule.</div>';
+  }
+
+  // Compliance banner
+  let compBanner = '';
+  if (scheduleMatch && assignedStaff.length > 0) {
+    if (complianceStatus === 'ok') {
+      compBanner = '<div style="padding:12px;background:#D1FAE5;border:2px solid #10B981;border-radius:8px;margin-top:12px"><div style="font-size:14px;font-weight:700;color:#065F46">✅ COMPLIANT — ' + serviceStaff + ' service staff for ' + pax + ' pax</div><div style="font-size:12px;color:#065F46;margin-top:4px">Minimum required: ' + staffNeeded + ' · Assigned: ' + serviceStaff + (surplus > 0 ? ' · Surplus: +' + surplus : '') + '</div></div>';
+    } else {
+      const shortfall = staffNeeded - serviceStaff;
+      compBanner = '<div style="padding:12px;background:rgba(196,69,54,.08);border:2px solid var(--error);border-radius:8px;margin-top:12px"><div style="font-size:14px;font-weight:700;color:var(--error)">❌ UNDER-STAFFED — Need ' + shortfall + ' more service staff</div><div style="font-size:12px;color:var(--error);margin-top:4px">Required: ' + staffNeeded + ' (1:' + EVENTS_STAFF_RATIO + ' ratio for ' + pax + ' pax) · Assigned: ' + serviceStaff + '</div></div>';
+    }
+  }
+
+  el.innerHTML = '<div id="eo-report">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+    + '<div><h3 style="font-size:18px;font-weight:700;margin-bottom:2px">🎪 Event Staffing Report</h3>'
+    + '<div style="font-size:13px;color:var(--stone)">' + (eoData.eventName || 'Event') + '</div></div>'
+    + '<div style="display:flex;gap:8px">'
+    + '<button class="btn btn-primary" onclick="downloadEOPDF()" style="font-size:12px;padding:8px 14px">📥 PDF</button>'
+    + '<button class="btn btn-danger" onclick="clearEO()" style="font-size:12px;padding:8px 14px">Clear</button>'
+    + '</div></div>'
+
+    // Key metrics
+    + '<div class="stat-grid">'
+    + '<div class="stat"><div class="stat-label">EVENT</div><div class="stat-value" style="font-size:16px">' + (eoData.eventType || '—') + '</div><div class="stat-sub">' + (eoData.date || '—') + '</div></div>'
+    + '<div class="stat"><div class="stat-label">PAX</div><div class="stat-value">' + pax + '</div><div class="stat-sub">guaranteed guests</div></div>'
+    + '<div class="stat"><div class="stat-label">STAFF REQUIRED</div><div class="stat-value">' + staffNeeded + '</div><div class="stat-sub">1 per ' + EVENTS_STAFF_RATIO + ' guests</div></div>'
+    + '<div class="stat"><div class="stat-label">ASSIGNED</div><div class="stat-value" style="color:' + (scheduleMatch ? (complianceStatus === 'ok' ? '#065F46' : 'var(--error)') : 'var(--stone)') + '">' + (scheduleMatch ? serviceStaff : '—') + '</div><div class="stat-sub">' + (scheduleMatch ? (complianceStatus === 'ok' ? '✅ compliant' : '❌ shortfall') : 'upload schedule') + '</div></div>'
+    + '</div>'
+
+    // Event details
+    + '<div class="card" style="margin-bottom:12px"><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:12px">'
+    + '<div><span style="color:var(--stone)">Time:</span> <strong>' + (eoData.startTime || '?') + ' – ' + (eoData.endTime || '?') + '</strong></div>'
+    + '<div><span style="color:var(--stone)">Venue:</span> <strong>' + (eoData.venue || '—') + '</strong></div>'
+    + '<div><span style="color:var(--stone)">Client:</span> <strong>' + (eoData.client || '—') + '</strong></div>'
+    + '<div><span style="color:var(--stone)">Setup:</span> <strong>' + (eoData.setupStyle || '—') + '</strong></div>'
+    + '<div><span style="color:var(--stone)">Menu:</span> <strong>' + (eoData.menuType || '—') + '</strong></div>'
+    + '<div><span style="color:var(--stone)">Coordinator:</span> <strong>' + (eoData.coordinator || '—') + '</strong></div>'
+    + '</div>'
+    + (eoData.specialNotes ? '<div style="margin-top:8px;font-size:11px;color:var(--stone);font-style:italic;border-top:1px solid var(--border);padding-top:8px">📝 ' + eoData.specialNotes + '</div>' : '')
+    + '<div style="margin-top:10px;padding:8px;background:var(--s2);border-radius:6px;font-size:11px"><strong>HR Rule:</strong> For weddings & events, 1 service staff per ' + EVENTS_STAFF_RATIO + ' guests (excluding managers and concierge)</div>'
+    + '</div>'
+
+    + compBanner
+    + staffTableHtml
+    + '</div>';
+}
+
+function downloadEOPDF() {
+  const report = document.getElementById('eo-report');
+  if (!report) return;
+  const win = window.open('', '_blank');
+  win.document.write('<!DOCTYPE html><html><head><title>Event Staffing Report - ' + (eoData?.eventName || 'Event') + '</title><style>* {margin:0;padding:0;box-sizing:border-box} body {font-family:Arial,sans-serif;font-size:12px;padding:20px} table {width:100%;border-collapse:collapse} th,td {padding:6px 8px;border:1px solid #ddd;font-size:11px} th {background:#f3f4f6} .stat-grid {display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px} .stat {border:1px solid #ddd;border-radius:6px;padding:8px} .stat-label {font-size:9px;font-weight:600;color:#888;text-transform:uppercase} .stat-value {font-size:16px;font-weight:700} .card {border:1px solid #ddd;border-radius:8px;padding:14px;margin-bottom:12px} @media print {button {display:none!important}}</style></head><body>');
+  win.document.write(report.innerHTML);
+  win.document.write('</body></html>');
+  win.document.close();
+  setTimeout(function() { win.print(); }, 500);
+}
 
 function downloadPDF() {
   const report = document.getElementById('staffing-report');
@@ -1222,7 +1403,7 @@ async function askAI() {
    DRAG & DROP
    ═══════════════════════════════════════════════════ */
 
-['schedule','revenue'].forEach(mode => {
+['schedule','revenue','eo'].forEach(mode => {
   const zone = document.getElementById(`${mode}-upload`);
   zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); });
   zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
