@@ -1394,61 +1394,69 @@ function runApprovalCheck() {
         var act=staff.length;
         totalReq+=req; totalAct+=act;
         var pct=req>0?Math.round((act/req)*100):100;
-        checks.push({dept:dept,day:dayLabel,date:iso,period:mp.label,required:req,actual:act,pct:pct,pass:pct>=95,status:comp.status,issues:comp.issues,ruleLabel:comp.ruleLabel});
+        // OVERSTAFFED >105% = FAIL (cost control), UNDERSTAFFED = WARN (flagged but passes)
+        var overstaffed = pct > 105;
+        var understaffed = act < req;
+        checks.push({dept:dept,day:dayLabel,date:iso,period:mp.label,required:req,actual:act,pct:pct,
+          overstaffed:overstaffed, understaffed:understaffed,
+          pass:!overstaffed, // only overstaffing blocks approval
+          status:comp.status,issues:comp.issues,ruleLabel:comp.ruleLabel});
       });
     });
   });
 
   var overallPct = totalReq>0 ? Math.round((totalAct/totalReq)*100) : 100;
-  var approved = overallPct >= 95;
-  var failedChecks = checks.filter(function(c){return !c.pass;});
-  var passedChecks = checks.filter(function(c){return c.pass;});
+  var overstaffedChecks = checks.filter(function(c){return c.overstaffed;});
+  var understaffedChecks = checks.filter(function(c){return c.understaffed;});
+  var onTargetChecks = checks.filter(function(c){return !c.overstaffed && !c.understaffed;});
+  var approved = overstaffedChecks.length === 0; // ONLY overstaffing blocks approval
 
   // Build HTML
   var h = '';
 
   // Banner
-  if (approved) {
+  if (approved && understaffedChecks.length === 0) {
     h += '<div style="padding:20px;background:#D1FAE5;border:2px solid #10B981;border-radius:12px;margin-bottom:16px;text-align:center">'
       +'<div style="font-size:36px;margin-bottom:8px">✅</div>'
       +'<div style="font-size:20px;font-weight:700;color:#065F46">SCHEDULE APPROVED</div>'
-      +'<div style="font-size:14px;color:#065F46;margin-top:4px">Overall compliance: '+overallPct+'% (threshold: 95%)</div>'
-      +'<div style="font-size:12px;color:#065F46;margin-top:4px">'+passedChecks.length+'/'+checks.length+' checks passed · '+(scheduleData.weekStart||'')+' → '+(scheduleData.weekEnd||'')+'</div>'
+      +'<div style="font-size:14px;color:#065F46;margin-top:4px">All shifts within staffing rules</div>'
+      +'<div style="font-size:12px;color:#065F46;margin-top:4px">'+checks.length+' checks passed · '+(scheduleData.weekStart||'')+' → '+(scheduleData.weekEnd||'')+'</div>'
       +'<div style="font-size:11px;color:#065F46;margin-top:8px;opacity:.7">Approved: '+new Date().toLocaleString()+'</div></div>';
+  } else if (approved && understaffedChecks.length > 0) {
+    h += '<div style="padding:20px;background:rgba(217,119,6,.08);border:2px solid var(--warning);border-radius:12px;margin-bottom:16px;text-align:center">'
+      +'<div style="font-size:36px;margin-bottom:8px">✅</div>'
+      +'<div style="font-size:20px;font-weight:700;color:#92400E">SCHEDULE APPROVED — WITH WARNINGS</div>'
+      +'<div style="font-size:14px;color:var(--warning);margin-top:4px">'+understaffedChecks.length+' understaffed shift'+(understaffedChecks.length>1?'s':'')+' flagged for review</div>'
+      +'<div style="font-size:12px;color:var(--stone);margin-top:4px">No overstaffing detected · Schedule is within budget</div>'
+      +'<div style="font-size:11px;color:#92400E;margin-top:8px;opacity:.7">Approved: '+new Date().toLocaleString()+'</div></div>';
   } else {
     h += '<div style="padding:20px;background:rgba(196,69,54,.08);border:2px solid var(--error);border-radius:12px;margin-bottom:16px;text-align:center">'
       +'<div style="font-size:36px;margin-bottom:8px">❌</div>'
-      +'<div style="font-size:20px;font-weight:700;color:var(--error)">SCHEDULE REJECTED</div>'
-      +'<div style="font-size:14px;color:var(--error);margin-top:4px">Overall compliance: '+overallPct+'% — below 95% threshold</div>'
-      +'<div style="font-size:12px;color:var(--error);margin-top:4px">'+failedChecks.length+' of '+checks.length+' checks failed</div></div>';
+      +'<div style="font-size:20px;font-weight:700;color:var(--error)">SCHEDULE REJECTED — OVERSTAFFED</div>'
+      +'<div style="font-size:14px;color:var(--error);margin-top:4px">'+overstaffedChecks.length+' shift'+(overstaffedChecks.length>1?'s':'')+' exceed staffing rules by more than 5%</div>'
+      +'<div style="font-size:12px;color:var(--error);margin-top:4px">Reduce headcount on flagged shifts to stay within budget</div></div>';
   }
 
   // Stats
   h += '<div class="stat-grid" style="margin-bottom:16px">'
-    +'<div class="stat"><div class="stat-label">OVERALL</div><div class="stat-value" style="color:'+(approved?'#065F46':'var(--error)')+'">'+overallPct+'%</div><div class="stat-sub">compliance score</div></div>'
-    +'<div class="stat"><div class="stat-label">PASSED</div><div class="stat-value" style="color:#065F46">'+passedChecks.length+'</div><div class="stat-sub">of '+checks.length+'</div></div>'
-    +'<div class="stat"><div class="stat-label">FAILED</div><div class="stat-value" style="color:'+(failedChecks.length>0?'var(--error)':'#065F46')+'">'+failedChecks.length+'</div><div class="stat-sub">'+(failedChecks.length>0?'need attention':'none')+'</div></div>'
-    +'<div class="stat"><div class="stat-label">THRESHOLD</div><div class="stat-value">95%</div><div class="stat-sub">5% tolerance</div></div></div>';
+    +'<div class="stat"><div class="stat-label">ON TARGET</div><div class="stat-value" style="color:#065F46">'+onTargetChecks.length+'</div><div class="stat-sub">within rules</div></div>'
+    +'<div class="stat"><div class="stat-label">UNDERSTAFFED</div><div class="stat-value" style="color:var(--warning)">'+understaffedChecks.length+'</div><div class="stat-sub">⚠️ flagged, still approved</div></div>'
+    +'<div class="stat"><div class="stat-label">OVERSTAFFED</div><div class="stat-value" style="color:'+(overstaffedChecks.length>0?'var(--error)':'#065F46')+'">'+overstaffedChecks.length+'</div><div class="stat-sub">'+(overstaffedChecks.length>0?'❌ blocks approval':'none')+'</div></div>'
+    +'<div class="stat"><div class="stat-label">TOLERANCE</div><div class="stat-value">≤105%</div><div class="stat-sub">max 5% over rules</div></div></div>';
 
-  // Progress bar
-  var barCol = approved ? '#10B981' : overallPct>=85 ? 'var(--warning)' : 'var(--error)';
-  h += '<div style="margin-bottom:16px;background:var(--s2);border-radius:8px;overflow:hidden;height:24px;position:relative">'
-    +'<div style="height:100%;width:'+Math.min(overallPct,100)+'%;background:'+barCol+';border-radius:8px"></div>'
-    +'<div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700">'+overallPct+'% compliant · 95% required</div></div>';
-
-  // Failed checks table
-  if (failedChecks.length > 0) {
-    h += '<div style="margin-bottom:16px"><h4 style="font-size:14px;font-weight:700;color:var(--error);margin-bottom:8px">❌ Failed Checks ('+failedChecks.length+')</h4>'
-      +'<div style="overflow:auto;border:1px solid var(--error);border-radius:8px"><table style="width:100%;border-collapse:collapse"><thead><tr style="background:rgba(196,69,54,.06)">'
+  // Overstaffed checks (REJECTION reason)
+  if (overstaffedChecks.length > 0) {
+    h += '<div style="margin-bottom:16px"><h4 style="font-size:14px;font-weight:700;color:var(--error);margin-bottom:8px">❌ Overstaffed — Blocks Approval ('+overstaffedChecks.length+')</h4>'
+      +'<div style="overflow:auto;border:2px solid var(--error);border-radius:8px"><table style="width:100%;border-collapse:collapse"><thead><tr style="background:rgba(196,69,54,.06)">'
       +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Dept</th>'
       +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Day</th>'
       +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Period</th>'
       +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Rule</th>'
-      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--error)">Req</th>'
+      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--error)">Required</th>'
       +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--error)">Actual</th>'
-      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--error)">%</th>'
-      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--error)">Issue</th></tr></thead><tbody>';
-    failedChecks.forEach(function(c) {
+      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--error)">Over by</th></tr></thead><tbody>';
+    overstaffedChecks.forEach(function(c) {
+      var over = c.actual - c.required;
       h += '<tr style="border-bottom:1px solid var(--border)">'
         +'<td style="padding:6px 10px;font-weight:600;font-size:12px">'+c.dept+'</td>'
         +'<td style="padding:6px 10px;font-size:12px">'+c.day+'</td>'
@@ -1456,44 +1464,71 @@ function runApprovalCheck() {
         +'<td style="padding:6px 10px;font-size:11px;color:var(--stone)">'+c.ruleLabel+'</td>'
         +'<td style="padding:6px 10px;text-align:center;font-weight:700">'+c.required+'</td>'
         +'<td style="padding:6px 10px;text-align:center;font-weight:700;color:var(--error)">'+c.actual+'</td>'
-        +'<td style="padding:6px 10px;text-align:center;color:var(--error)">'+c.pct+'%</td>'
-        +'<td style="padding:6px 10px;font-size:11px;color:var(--error)">'+c.issues.join('; ')+'</td></tr>';
+        +'<td style="padding:6px 10px;text-align:center;font-weight:700;color:var(--error)">+'+over+' ('+c.pct+'%)</td></tr>';
     });
     h += '</tbody></table></div></div>';
   }
 
-  // Passed checks (collapsible)
-  if (passedChecks.length > 0) {
-    h += '<details style="margin-bottom:16px"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:#065F46;padding:6px 0">✅ Passed Checks ('+passedChecks.length+'/'+checks.length+')</summary>'
+  // Understaffed checks (WARNING — still passes)
+  if (understaffedChecks.length > 0) {
+    h += '<div style="margin-bottom:16px"><h4 style="font-size:14px;font-weight:700;color:var(--warning);margin-bottom:8px">⚠️ Understaffed — Flagged for Review ('+understaffedChecks.length+')</h4>'
+      +'<div style="padding:8px 12px;background:rgba(217,119,6,.06);border:1px solid var(--warning);border-radius:8px;margin-bottom:8px;font-size:12px;color:var(--warning)">These shifts are below minimum staffing rules but <strong>do not block approval</strong>. Review and address if possible.</div>'
+      +'<div style="overflow:auto;border:1px solid var(--warning);border-radius:8px"><table style="width:100%;border-collapse:collapse"><thead><tr style="background:rgba(217,119,6,.06)">'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--warning)">Dept</th>'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--warning)">Day</th>'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--warning)">Period</th>'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--warning)">Rule</th>'
+      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--warning)">Required</th>'
+      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--warning)">Actual</th>'
+      +'<th style="padding:8px 10px;text-align:center;font-size:11px;color:var(--warning)">Short</th>'
+      +'<th style="padding:8px 10px;text-align:left;font-size:11px;color:var(--warning)">Detail</th></tr></thead><tbody>';
+    understaffedChecks.forEach(function(c) {
+      var short = c.required - c.actual;
+      h += '<tr style="border-bottom:1px solid var(--border)">'
+        +'<td style="padding:6px 10px;font-weight:600;font-size:12px">'+c.dept+'</td>'
+        +'<td style="padding:6px 10px;font-size:12px">'+c.day+'</td>'
+        +'<td style="padding:6px 10px;font-size:12px">'+c.period+'</td>'
+        +'<td style="padding:6px 10px;font-size:11px;color:var(--stone)">'+c.ruleLabel+'</td>'
+        +'<td style="padding:6px 10px;text-align:center;font-weight:700">'+c.required+'</td>'
+        +'<td style="padding:6px 10px;text-align:center;font-weight:700;color:var(--warning)">'+c.actual+'</td>'
+        +'<td style="padding:6px 10px;text-align:center;font-weight:700;color:var(--warning)">-'+short+'</td>'
+        +'<td style="padding:6px 10px;font-size:11px;color:var(--warning)">'+c.issues.join('; ')+'</td></tr>';
+    });
+    h += '</tbody></table></div></div>';
+  }
+
+  // On-target checks (collapsible)
+  if (onTargetChecks.length > 0) {
+    h += '<details style="margin-bottom:16px"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:#065F46;padding:6px 0">✅ On Target ('+onTargetChecks.length+'/'+checks.length+')</summary>'
       +'<div style="overflow:auto;border:1px solid #10B981;border-radius:8px;margin-top:8px"><table style="width:100%;border-collapse:collapse"><thead><tr style="background:rgba(16,185,129,.06)">'
       +'<th style="padding:6px 10px;text-align:left;font-size:11px;color:#065F46">Dept</th>'
       +'<th style="padding:6px 10px;text-align:left;font-size:11px;color:#065F46">Day</th>'
       +'<th style="padding:6px 10px;text-align:left;font-size:11px;color:#065F46">Period</th>'
       +'<th style="padding:6px 10px;text-align:center;font-size:11px;color:#065F46">Req</th>'
-      +'<th style="padding:6px 10px;text-align:center;font-size:11px;color:#065F46">Actual</th>'
-      +'<th style="padding:6px 10px;text-align:center;font-size:11px;color:#065F46">%</th></tr></thead><tbody>';
-    passedChecks.forEach(function(c) {
+      +'<th style="padding:6px 10px;text-align:center;font-size:11px;color:#065F46">Actual</th></tr></thead><tbody>';
+    onTargetChecks.forEach(function(c) {
       h += '<tr style="border-bottom:1px solid var(--border)">'
         +'<td style="padding:4px 10px;font-size:11px">'+c.dept+'</td>'
         +'<td style="padding:4px 10px;font-size:11px">'+c.day+'</td>'
         +'<td style="padding:4px 10px;font-size:11px">'+c.period+'</td>'
         +'<td style="padding:4px 10px;text-align:center;font-size:11px">'+c.required+'</td>'
-        +'<td style="padding:4px 10px;text-align:center;font-size:11px;color:#065F46;font-weight:600">'+c.actual+'</td>'
-        +'<td style="padding:4px 10px;text-align:center;font-size:11px;color:#065F46">'+c.pct+'%</td></tr>';
+        +'<td style="padding:4px 10px;text-align:center;font-size:11px;color:#065F46;font-weight:600">'+c.actual+'</td></tr>';
     });
     h += '</tbody></table></div></details>';
   }
 
   // Footer
   if (!approved) {
-    h += '<div style="padding:12px;background:var(--s2);border-radius:8px;text-align:center"><div style="font-size:13px;font-weight:600;margin-bottom:4px">Schedule needs adjustment</div><div style="font-size:12px;color:var(--stone)">Fix the '+failedChecks.length+' failed check'+(failedChecks.length>1?'s':'')+' and re-submit.</div></div>';
+    h += '<div style="padding:12px;background:rgba(196,69,54,.06);border:1px solid var(--error);border-radius:8px;text-align:center"><div style="font-size:13px;font-weight:600;color:var(--error);margin-bottom:4px">Reduce overstaffed shifts to within 5% of rules, then re-submit</div></div>';
+  } else if (understaffedChecks.length > 0) {
+    h += '<div style="padding:12px;background:rgba(217,119,6,.06);border:1px solid var(--warning);border-radius:8px;text-align:center"><div style="font-size:13px;font-weight:600;color:#92400E">✅ Approved — '+understaffedChecks.length+' understaffed shift'+(understaffedChecks.length>1?'s':'')+' flagged for awareness</div></div>';
   } else {
     h += '<div style="padding:12px;background:#D1FAE5;border-radius:8px;text-align:center"><div style="font-size:13px;font-weight:600;color:#065F46">✅ Schedule approved and ready to publish</div></div>';
   }
 
   panel.innerHTML = h;
   panel.scrollIntoView({ behavior:'smooth', block:'start' });
-  toast(approved ? 'Schedule APPROVED ✅' : 'Schedule REJECTED ❌', approved ? 'success' : 'error');
+  toast(approved ? (understaffedChecks.length > 0 ? 'APPROVED with warnings ⚠️' : 'Schedule APPROVED ✅') : 'REJECTED — overstaffed ❌', approved ? 'success' : 'error');
 }
 
 function loadSavedReport(key) {
