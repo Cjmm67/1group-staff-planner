@@ -165,6 +165,7 @@ SHIFT TIME: "10:00 - 22:30" style ranges, or codes L/Lunch=11:30-14:30, D/Dinner
 Roles: Server, Runner, Bartender, Kitchen Helper, Steward, Host/Hostess, Banquet Staff, Barista, Cashier.
 Rates: Server=14, Bartender=16, Kitchen Helper=12.5, Runner=11.5, Steward=11, Host=14.5.
 CRITICAL: Determine actual calendar dates. Use YYYY-MM-DD.
+IMPORTANT: Keep JSON compact. Skip OFF/RD days entirely — only include shifts with actual work times. Use minimal whitespace. If many employees, be concise.
 RESPOND ONLY valid JSON, no markdown, no backticks:
 {"venue":"1-Arden","weekStart":"YYYY-MM-DD","weekEnd":"YYYY-MM-DD","employees":[{"name":"Name","roles":["Server"],"type":"full-time","rate":14,"department":"Kaarla","shifts":[{"date":"YYYY-MM-DD","start":"17:30","end":"22:30","role":"Server","breakMins":60}]}],"notes":"observations"}`;
 
@@ -325,7 +326,7 @@ async function handleUpload(file, mode) {
       signal: controller.signal,
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 8000,
+        max_tokens: 16000,
         system: prompt,
         messages: [{ role: 'user', content: userContent }]
       })
@@ -340,14 +341,40 @@ async function handleUpload(file, mode) {
 
     const data = await resp.json();
     const raw = data.content?.[0]?.text || '';
-    log(mode, `Response: ${raw.substring(0, 100)}...`);
+    log(mode, `Response length: ${raw.length} chars`);
+    log(mode, `Response end: ...${raw.substring(raw.length - 80)}`);
 
     if (!raw) throw new Error('Empty AI response');
 
     let cleaned = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
     let result;
     try { result = JSON.parse(cleaned); }
-    catch { const m = cleaned.match(/\{[\s\S]*\}/); if (m) result = JSON.parse(m[0]); else throw new Error('Response not valid JSON'); }
+    catch (parseErr) {
+      log(mode, `JSON parse failed: ${parseErr.message}`);
+      // Try to repair truncated JSON (response cut off mid-array)
+      let repaired = cleaned;
+      // Remove trailing incomplete object/element
+      repaired = repaired.replace(/,\s*\{[^}]*$/, '');  // remove last incomplete object in array
+      repaired = repaired.replace(/,\s*"[^"]*$/, '');    // remove last incomplete string
+      repaired = repaired.replace(/,\s*$/, '');           // remove trailing comma
+      // Close any open arrays and objects
+      const opens = (repaired.match(/\[/g) || []).length;
+      const closes = (repaired.match(/\]/g) || []).length;
+      const openBraces = (repaired.match(/\{/g) || []).length;
+      const closeBraces = (repaired.match(/\}/g) || []).length;
+      for (let i = 0; i < opens - closes; i++) repaired += ']';
+      for (let i = 0; i < openBraces - closeBraces; i++) repaired += '}';
+      log(mode, `Attempting repair (added ${opens-closes} ] and ${openBraces-closeBraces} })`);
+      try {
+        result = JSON.parse(repaired);
+        log(mode, `Repair successful! Got ${result.employees?.length || result.venues?.length || '?'} items`);
+      } catch (e2) {
+        // Last resort: extract the largest valid JSON object
+        const m = cleaned.match(/\{[\s\S]*\}/);
+        if (m) { result = JSON.parse(m[0]); }
+        else { throw new Error(`JSON repair failed: ${parseErr.message}`); }
+      }
+    }
 
     log(mode, 'Parse successful!');
     showPreview(mode, result);
