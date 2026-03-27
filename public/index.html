@@ -209,10 +209,25 @@ const MANPOWER_RULES = {
 // Map schedule department names to rule keys
 const DEPT_TO_RULE = {
   "sol & luna": "Sol & Luna", "sol and luna": "Sol & Luna", "sol luna": "Sol & Luna",
-  "kaarla": "Kaarla",
+  "sol&luna": "Sol & Luna", "sol & luna ops": "Sol & Luna",
+  "kaarla": "Kaarla", "kaarla ops": "Kaarla",
   "oumi": "Oumi", "oumi ops": "Oumi",
   "arden bar": "Arden Bar", "bar ops": "Arden Bar", "1-arden bar": "Arden Bar",
+  "arden bar ops": "Arden Bar", "bar operations": "Arden Bar",
 };
+
+// Fuzzy lookup: try exact, then contains match
+function getRuleKey(deptName) {
+  if (!deptName) return null;
+  const d = deptName.toLowerCase().trim();
+  // Exact match
+  if (DEPT_TO_RULE[d]) return DEPT_TO_RULE[d];
+  // Contains match
+  for (const [key, val] of Object.entries(DEPT_TO_RULE)) {
+    if (d.includes(key) || key.includes(d)) return val;
+  }
+  return null;
+}
 
 // Classify a staff member: manager | barman | ft | pt
 function classifyStaff(emp) {
@@ -239,7 +254,7 @@ function classifyStaff(emp) {
 // Check compliance for a department × meal period × day
 // Returns: { status: 'ok'|'warn'|'fail', issues: string[], rule: object, actual: object }
 function checkCompliance(deptName, periodKey, staffList, dayOfWeek, dailyRevenue) {
-  const ruleKey = DEPT_TO_RULE[(deptName || '').toLowerCase()];
+  const ruleKey = getRuleKey(deptName);
   if (!ruleKey || !MANPOWER_RULES[ruleKey]) return null;
 
   let rule = MANPOWER_RULES[ruleKey][periodKey];
@@ -636,12 +651,12 @@ function renderSchedule() {
   const fmtDay = d => `${dayNames[d.getDay()]} ${d.getDate()}/${d.getMonth()+1}`;
   const fmtISO = d => d.toISOString().split('T')[0];
 
-  // Meal period definitions (24h format)
+  // Meal period definitions (24h format) — NO GAPS between periods
   const MEAL_PERIODS = [
     { key: 'breakfast', label: 'Breakfast', start: 6, end: 11, color: '#FEF3C7', textColor: '#92400E', icon: '🌅' },
-    { key: 'lunch',     label: 'Lunch',     start: 12, end: 15, color: '#DBEAFE', textColor: '#1E40AF', icon: '☀️' },
-    { key: 'hightea',   label: 'High Tea',  start: 15, end: 17, color: '#D1FAE5', textColor: '#065F46', icon: '🍵' },
-    { key: 'dinner',    label: 'Dinner',    start: 18, end: 23, color: '#EDE9FE', textColor: '#5B21B6', icon: '🌙' },
+    { key: 'lunch',     label: 'Lunch',     start: 11, end: 15, color: '#DBEAFE', textColor: '#1E40AF', icon: '☀️' },
+    { key: 'hightea',   label: 'High Tea',  start: 15, end: 18, color: '#D1FAE5', textColor: '#065F46', icon: '🍵' },
+    { key: 'dinner',    label: 'Dinner',    start: 18, end: 24, color: '#EDE9FE', textColor: '#5B21B6', icon: '🌙' },
   ];
 
   // Parse "13:00" or "1PM" to decimal hours
@@ -761,22 +776,29 @@ function renderSchedule() {
             const cat = classifyStaff(s);
             const catBadge = {manager:'<span style="background:#D1FAE5;color:#065F46;font-size:8px;padding:1px 4px;border-radius:3px;margin-left:2px">MGR</span>',barman:'<span style="background:#FEF3C7;color:#92400E;font-size:8px;padding:1px 4px;border-radius:3px;margin-left:2px">BAR</span>',pt:'<span style="background:#FDE68A;color:#92400E;font-size:8px;padding:1px 4px;border-radius:3px;margin-left:2px">PT</span>',ft:''}[cat];
             const firstName = s.name.split(' ').slice(0,2).join(' ');
-            return `<div style="font-size:10px;line-height:1.5;white-space:nowrap">${firstName}${catBadge}</div>`;
+            const timeStr = s.start && s.end ? ' <span style="color:var(--stone);font-size:8px">' + s.start + '-' + s.end + '</span>' : '';
+            return '<div style="font-size:10px;line-height:1.5;white-space:nowrap">' + firstName + catBadge + timeStr + '</div>';
           }).join('');
 
-          cells += `<td style="vertical-align:top;padding:4px;min-width:110px;background:${bgTint};border-left:3px solid ${borderColor}">
+          const complianceBanner = compliance
+            ? (compliance.status === 'ok'
+              ? '<div style="font-size:9px;color:#065F46;margin-top:3px;padding:2px 4px;background:#D1FAE5;border-radius:3px;text-align:center">✅ OK</div>'
+              : '<div style="font-size:8px;color:' + (compliance.status==='fail'?'var(--error)':'var(--warning)') + ';margin-top:3px;padding:2px 4px;background:' + (compliance.status==='fail'?'rgba(196,69,54,.1)':'rgba(217,119,6,.1)') + ';border-radius:3px">' + (compliance.status==='fail'?'❌ ':'⚠️ ') + compliance.issues[0] + '</div>')
+            : '';
+
+          cells += `<td style="vertical-align:top;padding:4px;min-width:120px;background:${bgTint};border-left:3px solid ${borderColor}">
             <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
               <span style="font-size:12px;font-weight:700;color:${mp.textColor}">${count}</span>
-              ${compliance ? `<span style="font-size:10px">${statusIcon}</span>` : ''}
+              ${compliance ? '<span style="font-size:10px">' + statusIcon + '</span>' : ''}
             </div>
             ${names}
-            ${compliance && compliance.issues.length ? `<div style="font-size:8px;color:${compliance.status==='fail'?'var(--error)':'var(--warning)'};margin-top:2px">${compliance.issues[0]}</div>` : ''}
+            ${complianceBanner}
           </td>`;
         }
       });
 
       // Rule label in period header
-      const ruleKey = DEPT_TO_RULE[(dept || '').toLowerCase()];
+      const ruleKey = getRuleKey(dept);
       const rule = ruleKey && MANPOWER_RULES[ruleKey] ? MANPOWER_RULES[ruleKey][mp.key] : null;
 
       mealRows += `<tr style="border-bottom:1px solid var(--border)">
