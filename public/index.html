@@ -173,6 +173,128 @@ const ROLES = {Server:{icon:"🍽️",colour:"#3B82F6"},Runner:{icon:"🏃",colo
 
 const DEPT_MAP = {"kaarla":"1-arden","oumi":"1-arden","sol & luna":"1-arden","sol and luna":"1-arden","1-arden bar op":"1-arden","bar op":"1-arden","bar operations":"1-arden","concierge":"1-arden"};
 
+/* ═══════════════════════════════════════════════════
+   MANPOWER RULES — 1-Arden
+   ═══════════════════════════════════════════════════ */
+
+const MANPOWER_RULES = {
+  "Sol & Luna": {
+    breakfast: { manager: 1, ft: 1, pt: 1, barman: 0, extraPtThreshold: 2300, label: "1 MGR + 1 FT/PT + 1 PT" },
+    lunch:     { manager: 1, ft: 1, pt: 1, barman: 1, extraPtThreshold: 3500, label: "1 MGR + 1 FT/PT + 1 PT + 1 BAR" },
+    brunch:    { manager: 1, ft: 1, pt: 1, barman: 0, extraPtThreshold: 3500, label: "1 MGR + 1 FT/PT + 1 PT" },
+    hightea:   null,
+    dinner:    { manager: 1, ft: 1, pt: 1, barman: 1, extraPtThreshold: 3500, label: "1 MGR + 1 FT/PT + 1 PT + 1 BAR" },
+  },
+  "Kaarla": {
+    breakfast: null,
+    lunch:     { manager: 1, ft: 1, pt: 1, barman: 0, extraPtThreshold: 3500, label: "1 MGR + 1 FT/PT + 1 PT" },
+    hightea:   { manager: 1, ft: 1, pt: 0, barman: 0, extraPtThreshold: 2000, label: "1 MGR + 1 FT/PT" },
+    dinner:    { manager: 1, ft: 1, pt: 1, barman: 0, extraPtThreshold: 3500, label: "1 MGR + 1 FT/PT + 1 PT" },
+  },
+  "Oumi": {
+    breakfast: null,
+    lunch:     { manager: 1, ft: 1, pt: 1, barman: 0, extraPtThreshold: 3500, label: "1 MGR + 1 FT/PT + 1 PT" },
+    hightea:   null,
+    dinner:    { manager: 1, ft: 1, pt: 1, barman: 0, extraPtThreshold: 3500, label: "1 MGR + 1 FT/PT + 1 PT" },
+  },
+  "Arden Bar": {
+    breakfast: null,
+    lunch:     { manager: 0, ft: 1, pt: 0, barman: 1, extraPtThreshold: null, label: "1 BAR + 1 FT/PT", note: "Daytime 11-5PM" },
+    hightea:   { manager: 0, ft: 1, pt: 0, barman: 1, extraPtThreshold: null, label: "1 BAR + 1 FT/PT", note: "Daytime 11-5PM" },
+    dinner:    { manager: 1, ft: 2, pt: 0, barman: 2, extraPtThreshold: 4500, label: "1 MGR + 2 BAR + 2 FT/PT" },
+    dinnerSunday: { manager: 1, ft: 0, pt: 1, barman: 1, extraPtThreshold: null, label: "1 MGR + 1 BAR + 1 PT" },
+  },
+};
+
+// Map schedule department names to rule keys
+const DEPT_TO_RULE = {
+  "sol & luna": "Sol & Luna", "sol and luna": "Sol & Luna", "sol luna": "Sol & Luna",
+  "kaarla": "Kaarla",
+  "oumi": "Oumi", "oumi ops": "Oumi",
+  "arden bar": "Arden Bar", "bar ops": "Arden Bar", "1-arden bar": "Arden Bar",
+};
+
+// Classify a staff member: manager | barman | ft | pt
+function classifyStaff(emp) {
+  const role = (emp.role || '').toLowerCase();
+  const dept = (emp.department || '').toLowerCase();
+  const type = (emp.type || '').toLowerCase();
+  const name = (emp.name || '').toLowerCase();
+
+  // Managers: MGR, MANAGER, SUPERVISOR, CAPTAIN, TRAINEE (management)
+  if (/\b(mgr|manager|supervisor|captain|management trainee|ops mgr|assistant mgr|senior assistant|restaurant mgr)\b/.test(role)) return 'manager';
+  if (/\b(mgr|manager|supervisor|captain|management trainee)\b/.test(dept)) return 'manager';
+
+  // Barman/Bartender
+  if (/\b(barman|bartender|bar mgr|bar manager|senior bar)\b/.test(role)) return 'barman';
+  if (/\b(bartender|barman)\b/.test(dept)) return 'barman';
+
+  // Part-time
+  if (type === 'part-time' || /\b(part.?time|agency|intern|pt)\b/.test(type) || /\b(part.?time|agency|intern)\b/.test(role) || /\b(agency|part.?time|intern)\b/.test(dept)) return 'pt';
+
+  // Default: full-time
+  return 'ft';
+}
+
+// Check compliance for a department × meal period × day
+// Returns: { status: 'ok'|'warn'|'fail', issues: string[], rule: object, actual: object }
+function checkCompliance(deptName, periodKey, staffList, dayOfWeek, dailyRevenue) {
+  const ruleKey = DEPT_TO_RULE[(deptName || '').toLowerCase()];
+  if (!ruleKey || !MANPOWER_RULES[ruleKey]) return null;
+
+  let rule = MANPOWER_RULES[ruleKey][periodKey];
+  // Sunday evening override for Arden Bar
+  if (ruleKey === 'Arden Bar' && periodKey === 'dinner' && dayOfWeek === 0 && MANPOWER_RULES[ruleKey].dinnerSunday) {
+    rule = MANPOWER_RULES[ruleKey].dinnerSunday;
+  }
+  if (!rule) return null;
+
+  // Count actual staff by category
+  const actual = { manager: 0, barman: 0, ft: 0, pt: 0, total: staffList.length };
+  staffList.forEach(s => {
+    const cat = classifyStaff(s);
+    actual[cat]++;
+  });
+
+  const issues = [];
+  let status = 'ok';
+
+  // Check minimum requirements
+  if (actual.manager < rule.manager) { issues.push(`Need ${rule.manager} MGR, have ${actual.manager}`); status = 'fail'; }
+  if (actual.barman < rule.barman) { issues.push(`Need ${rule.barman} BAR, have ${actual.barman}`); status = 'fail'; }
+
+  // FT requirement: can be filled by ft OR pt
+  const ftNeeded = rule.ft;
+  const ftAvailable = actual.ft + actual.pt;
+  const ptUsedForFt = Math.max(0, ftNeeded - actual.ft);
+  const remainingPt = actual.pt - ptUsedForFt;
+
+  if (ftAvailable < ftNeeded) { issues.push(`Need ${ftNeeded} FT/PT staff, have ${ftAvailable}`); status = 'fail'; }
+  if (remainingPt < rule.pt) {
+    if (status !== 'fail') status = 'warn';
+    issues.push(`Need ${rule.pt} extra PT, have ${remainingPt}`);
+  }
+
+  // Revenue-based extra PT check
+  if (dailyRevenue && rule.extraPtThreshold && dailyRevenue > rule.extraPtThreshold) {
+    const extraNeeded = Math.ceil((dailyRevenue - rule.extraPtThreshold) / rule.extraPtThreshold);
+    const totalMinPt = rule.pt + extraNeeded;
+    if (remainingPt < totalMinPt) {
+      if (status === 'ok') status = 'warn';
+      issues.push(`Rev $${dailyRevenue.toLocaleString()} > $${rule.extraPtThreshold}: need +${extraNeeded} PT`);
+    }
+  }
+
+  // Overstaffed check
+  const minTotal = rule.manager + rule.barman + rule.ft + rule.pt;
+  if (actual.total > minTotal + 2 && status === 'ok') {
+    status = 'warn';
+    issues.push(`${actual.total} staff vs ${minTotal} min — check if needed`);
+  }
+
+  return { status, issues, rule, actual, ruleLabel: rule.label };
+}
+
 const SCHEDULE_PROMPT = `You are a schedule data extractor for 1-Group Singapore hospitality.
 Extract employees and shifts from this staff schedule.
 
@@ -604,8 +726,9 @@ function renderSchedule() {
     let deptDayTotals = {};
     days.forEach(d => { deptDayTotals[fmtISO(d)] = 0; });
 
-    // Meal period rows — show ALL periods, even if empty for some days
+    // Meal period rows with compliance checking
     let mealRows = '';
+    let deptIssues = [];
     mealPeriods.forEach(mp => {
       let cells = '';
       let periodTotal = 0;
@@ -615,25 +738,51 @@ function renderSchedule() {
         const count = staff.length;
         periodTotal += count;
 
-        if (count === 0) {
+        // Run compliance check
+        const dayOfWeek = d.getDay(); // 0=Sun
+        const compliance = checkCompliance(dept, mp.key, staff, dayOfWeek, null);
+        const borderColor = compliance ? (compliance.status === 'fail' ? 'var(--error)' : compliance.status === 'warn' ? 'var(--warning)' : '#10B981') : 'transparent';
+        const bgTint = compliance ? (compliance.status === 'fail' ? 'rgba(196,69,54,.06)' : compliance.status === 'warn' ? 'rgba(217,119,6,.06)' : '') : '';
+        const statusIcon = compliance ? (compliance.status === 'fail' ? '🔴' : compliance.status === 'warn' ? '🟡' : '🟢') : '';
+        if (compliance && compliance.status !== 'ok') {
+          deptIssues.push({ day: fmtDay(d), period: mp.label, issues: compliance.issues, status: compliance.status });
+        }
+
+        if (count === 0 && !compliance) {
           cells += `<td style="text-align:center;color:var(--stone);font-size:11px;vertical-align:top;padding:6px 4px">—</td>`;
+        } else if (count === 0 && compliance) {
+          cells += `<td style="text-align:center;vertical-align:top;padding:6px 4px;background:rgba(196,69,54,.06);border-left:3px solid var(--error)">
+            <div style="font-size:10px">🔴 0</div>
+            <div style="font-size:9px;color:var(--error)">${compliance.ruleLabel || ''}</div>
+          </td>`;
         } else {
+          // Classify each staff member for display
           const names = staff.map(s => {
-            const typeTag = s.type === 'part-time' ? '<span style="color:var(--warning);font-size:8px;margin-left:2px">PT</span>' : '';
-            const timeStr = s.start && s.end ? `<span style="color:var(--stone);font-size:9px">${s.start}-${s.end}</span>` : '';
+            const cat = classifyStaff(s);
+            const catBadge = {manager:'<span style="background:#D1FAE5;color:#065F46;font-size:8px;padding:1px 4px;border-radius:3px;margin-left:2px">MGR</span>',barman:'<span style="background:#FEF3C7;color:#92400E;font-size:8px;padding:1px 4px;border-radius:3px;margin-left:2px">BAR</span>',pt:'<span style="background:#FDE68A;color:#92400E;font-size:8px;padding:1px 4px;border-radius:3px;margin-left:2px">PT</span>',ft:''}[cat];
             const firstName = s.name.split(' ').slice(0,2).join(' ');
-            return `<div style="font-size:10px;line-height:1.5;white-space:nowrap">${firstName}${typeTag} ${timeStr}</div>`;
+            return `<div style="font-size:10px;line-height:1.5;white-space:nowrap">${firstName}${catBadge}</div>`;
           }).join('');
-          cells += `<td style="vertical-align:top;padding:4px;min-width:110px">
-            <div style="font-size:12px;font-weight:700;color:${mp.textColor};margin-bottom:2px">${count}</div>
+
+          cells += `<td style="vertical-align:top;padding:4px;min-width:110px;background:${bgTint};border-left:3px solid ${borderColor}">
+            <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
+              <span style="font-size:12px;font-weight:700;color:${mp.textColor}">${count}</span>
+              ${compliance ? `<span style="font-size:10px">${statusIcon}</span>` : ''}
+            </div>
             ${names}
+            ${compliance && compliance.issues.length ? `<div style="font-size:8px;color:${compliance.status==='fail'?'var(--error)':'var(--warning)'};margin-top:2px">${compliance.issues[0]}</div>` : ''}
           </td>`;
         }
       });
 
+      // Rule label in period header
+      const ruleKey = DEPT_TO_RULE[(dept || '').toLowerCase()];
+      const rule = ruleKey && MANPOWER_RULES[ruleKey] ? MANPOWER_RULES[ruleKey][mp.key] : null;
+
       mealRows += `<tr style="border-bottom:1px solid var(--border)">
         <td style="padding:6px 10px;font-size:12px;font-weight:600;white-space:nowrap;background:${mp.color};color:${mp.textColor};border-right:1px solid var(--border)">
           ${mp.icon} ${mp.label}<div style="font-size:9px;font-weight:400">${mp.start}:00-${mp.end}:00</div>
+          ${rule ? `<div style="font-size:8px;font-weight:400;opacity:.7;margin-top:2px">${rule.label}</div>` : ''}
         </td>
         ${cells}
         <td style="text-align:center;font-weight:700;font-size:12px;color:${mp.textColor};background:${mp.color}">${periodTotal}</td>
@@ -658,17 +807,42 @@ function renderSchedule() {
       `<td style="text-align:center;font-weight:700;font-size:13px;padding:8px 4px">${deptDayTotals[fmtISO(d)]}</td>`
     ).join('');
 
+    // Pre-build compliance issues panel HTML
+    let complianceHtml = '';
+    if (deptIssues.length > 0) {
+      const hasFail = deptIssues.some(function(i) { return i.status === 'fail'; });
+      const bgCol = hasFail ? 'rgba(196,69,54,.06)' : 'rgba(217,119,6,.06)';
+      const borderCol = hasFail ? 'var(--error)' : 'var(--warning)';
+      const headIcon = hasFail ? '🔴' : '🟡';
+      let issueLines = '';
+      deptIssues.forEach(function(i) {
+        const icon = i.status === 'fail' ? '🔴' : '🟡';
+        issueLines += '<div style="font-size:10px;color:var(--charcoal);line-height:1.6">' + icon + ' <strong>' + i.day + ' ' + i.period + ':</strong> ' + i.issues.join('; ') + '</div>';
+      });
+      complianceHtml = '<div style="margin-top:6px;padding:8px 12px;border-radius:6px;background:' + bgCol + ';border:1px solid ' + borderCol + '">'
+        + '<div style="font-size:11px;font-weight:700;margin-bottom:4px;color:' + borderCol + '">' + headIcon + ' ' + deptIssues.length + ' compliance issue' + (deptIssues.length > 1 ? 's' : '') + '</div>'
+        + issueLines + '</div>';
+    } else {
+      complianceHtml = '<div style="margin-top:6px;padding:6px 12px;border-radius:6px;background:rgba(16,185,129,.06);border:1px solid #10B981"><div style="font-size:11px;color:#065F46">🟢 All shifts compliant with manpower rules</div></div>';
+    }
+
+    // Build day header cells
+    let dayHeaderCells = '';
+    days.forEach(function(d) {
+      dayHeaderCells += '<th style="padding:8px 4px;text-align:center;font-size:11px;font-weight:600;color:var(--stone);min-width:90px">' + fmtDay(d) + '</th>';
+    });
+
     deptSections += `
       <div style="margin-bottom:16px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <div style="font-size:14px;font-weight:700">${dept}</div>
-          <div style="font-size:12px;color:var(--stone)">${deptTotal} total shifts</div>
+          <div style="font-size:12px;color:var(--stone)">${deptTotal} unique staff-days</div>
         </div>
         <div style="overflow:auto;border:1px solid var(--border);border-radius:8px">
           <table style="width:100%;border-collapse:collapse;min-width:700px">
             <thead><tr style="background:var(--s2)">
               <th style="padding:8px 10px;text-align:left;font-size:11px;font-weight:600;color:var(--stone);border-right:1px solid var(--border);width:100px">Period</th>
-              ${days.map(d => `<th style="padding:8px 4px;text-align:center;font-size:11px;font-weight:600;color:var(--stone);min-width:90px">${fmtDay(d)}</th>`).join('')}
+              ${dayHeaderCells}
               <th style="padding:8px 4px;text-align:center;font-size:11px;font-weight:600;color:var(--stone);width:50px">Total</th>
             </tr></thead>
             <tbody>
@@ -681,6 +855,7 @@ function renderSchedule() {
             </tbody>
           </table>
         </div>
+        ${complianceHtml}
       </div>`;
   });
 
@@ -715,6 +890,26 @@ function renderSchedule() {
     </tr>`;
   }).join('');
 
+  // Pre-build manpower rules reference HTML
+  let rulesRefHtml = '';
+  Object.entries(MANPOWER_RULES).forEach(function(entry) {
+    const dept = entry[0];
+    const periods = entry[1];
+    let periodRows = '';
+    Object.entries(periods).forEach(function(pe) {
+      const pk = pe[0];
+      const rule = pe[1];
+      if (!rule || pk === 'dinnerSunday') return;
+      const pLabel = pk === 'hightea' ? 'High Tea' : pk.charAt(0).toUpperCase() + pk.slice(1);
+      const threshold = rule.extraPtThreshold ? ' · +PT >$' + rule.extraPtThreshold : '';
+      periodRows += '<div style="font-size:10px;padding:3px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between"><span style="font-weight:600">' + pLabel + '</span><span style="color:var(--stone)">' + rule.label + threshold + '</span></div>';
+    });
+    if (periods.dinnerSunday) {
+      periodRows += '<div style="font-size:10px;padding:3px 0;color:var(--stone)">Sun Eve: ' + periods.dinnerSunday.label + '</div>';
+    }
+    rulesRefHtml += '<div style="background:var(--s0);border:1px solid var(--border);border-radius:8px;padding:10px"><div style="font-size:13px;font-weight:700;margin-bottom:6px">' + dept + '</div>' + periodRows + '</div>';
+  });
+
   el.innerHTML = `
     <div id="staffing-report">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -735,6 +930,28 @@ function renderSchedule() {
         <div class="stat"><div class="stat-label">DEPARTMENTS</div><div class="stat-value">${depts.length}</div><div class="stat-sub">${depts.join(', ')}</div></div>
         <div class="stat"><div class="stat-label">WEEK HEADCOUNT</div><div class="stat-value">${grandTotal}</div><div class="stat-sub">shift-slots filled</div></div>
       </div>
+
+      <!-- Compliance Legend -->
+      <div style="display:flex;gap:16px;margin-bottom:12px;padding:10px 14px;background:var(--s0);border:1px solid var(--border);border-radius:8px;flex-wrap:wrap;align-items:center">
+        <div style="font-size:12px;font-weight:700;color:var(--charcoal)">Compliance Key:</div>
+        <div style="display:flex;align-items:center;gap:4px;font-size:11px">🟢 <span style="color:#065F46">Meets rules</span></div>
+        <div style="display:flex;align-items:center;gap:4px;font-size:11px">🟡 <span style="color:var(--warning)">Warning</span></div>
+        <div style="display:flex;align-items:center;gap:4px;font-size:11px">🔴 <span style="color:var(--error)">Under-staffed</span></div>
+        <div style="font-size:10px;color:var(--stone);margin-left:auto">
+          <span style="background:#D1FAE5;color:#065F46;font-size:8px;padding:1px 4px;border-radius:3px">MGR</span>
+          <span style="background:#FEF3C7;color:#92400E;font-size:8px;padding:1px 4px;border-radius:3px;margin-left:2px">BAR</span>
+          <span style="background:#FDE68A;color:#92400E;font-size:8px;padding:1px 4px;border-radius:3px;margin-left:2px">PT</span>
+          = auto-classified from role/dept
+        </div>
+      </div>
+
+      <!-- Manpower Rules Reference (collapsible) -->
+      <details style="margin-bottom:12px">
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--forest);padding:6px 0">📋 Manpower Rules Reference</summary>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin-top:8px">
+          ${rulesRefHtml}
+        </div>
+      </details>
 
       <!-- Grand total bar -->
       <div style="overflow:auto;border:2px solid var(--forest);border-radius:8px;margin-bottom:16px">
